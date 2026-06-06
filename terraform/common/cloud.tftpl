@@ -1,0 +1,11 @@
+terraform {
+  required_version = ">= 1.2.0"
+
+  cloud {
+    organization = "__TF_CLOUD_ORGANIZATION__"
+
+    workspaces {
+      name = "__TF_WORKSPACE__"
+    }
+  }
+}

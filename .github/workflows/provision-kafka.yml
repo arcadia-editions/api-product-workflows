@@ -1,0 +1,214 @@
+name: Provision Kafka
+
+on:
+  workflow_call:
+    inputs:
+      service_repo:
+        description: Repository name inside the arcadia-editions org.
+        required: true
+        type: string
+      pipeline_ref:
+        description: Git ref to use when checking out the shared pipeline repository.
+        required: false
+        default: main
+        type: string
+      asyncapi_file:
+        description: Path to the AsyncAPI file relative to the service repository root.
+        required: false
+        default: asyncapi.yml
+        type: string
+      server:
+        description: Target server/profile passed to the generator.
+        required: false
+        default: staging
+        type: string
+      java_distribution:
+        description: Java distribution used by the pipeline.
+        required: false
+        default: temurin
+        type: string
+      java_version:
+        description: Java version used by the pipeline.
+        required: false
+        default: "21"
+        type: string
+      upload_artifact:
+        description: Upload generated Terraform as a workflow artifact.
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  generate-terraform:
+    name: Generate Terraform
+    runs-on: ubuntu-latest
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+      TF_CLOUD_ORGANIZATION: ${{ vars.TF_CLOUD_ORGANIZATION }}
+      TF_TOKEN_app_terraform_io: ${{ secrets.TF_TOKEN_app_terraform_io }}
+      PIPELINE_TF_WORKSPACE: ${{ format('{0}-{1}', inputs.service_repo, inputs.server) }}
+      TF_VAR_confluent_cloud_api_key: ${{ secrets.CONFLUENT_CLOUD_API_KEY }}
+      TF_VAR_confluent_cloud_api_secret: ${{ secrets.CONFLUENT_CLOUD_API_SECRET }}
+      TF_VAR_kafka_id: ${{ vars.CONFLUENT_KAFKA_CLUSTER_ID }}
+      TF_VAR_kafka_rest_endpoint: ${{ vars.CONFLUENT_KAFKA_REST_ENDPOINT }}
+      TF_VAR_kafka_api_key: ${{ secrets.CONFLUENT_KAFKA_API_KEY }}
+      TF_VAR_kafka_api_secret: ${{ secrets.CONFLUENT_KAFKA_API_SECRET }}
+      TF_VAR_schema_registry_id: ${{ vars.CONFLUENT_SCHEMA_REGISTRY_ID }}
+      TF_VAR_schema_registry_rest_endpoint: ${{ vars.CONFLUENT_SCHEMA_REGISTRY_REST_ENDPOINT }}
+      TF_VAR_schema_registry_api_key: ${{ secrets.CONFLUENT_SCHEMA_REGISTRY_API_KEY }}
+      TF_VAR_schema_registry_api_secret: ${{ secrets.CONFLUENT_SCHEMA_REGISTRY_API_SECRET }}
+
+    steps:
+      - name: Checkout service repository
+        uses: actions/checkout@v4
+        with:
+          repository: arcadia-editions/${{ inputs.service_repo }}
+          path: service-repo
+
+      - name: Checkout shared pipeline repository
+        uses: actions/checkout@v4
+        with:
+          repository: arcadia-editions/asyncapi-ops-pipelines
+          ref: ${{ inputs.pipeline_ref }}
+          path: pipeline-repo
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: ${{ inputs.java_distribution }}
+          java-version: ${{ inputs.java_version }}
+
+      - name: Set up JBang
+        uses: jbangdev/setup-jbang@main
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Generate Terraform from AsyncAPI
+        shell: bash
+        run: |
+          chmod +x ./pipeline-repo/scripts/provision-kafka.sh
+          ./pipeline-repo/scripts/provision-kafka.sh \
+            ./service-repo \
+            ./pipeline-repo \
+            "${{ inputs.asyncapi_file }}" \
+            "${{ inputs.server }}"
+
+      - name: Check Terraform inputs
+        shell: bash
+        run: |
+          chmod +x ./pipeline-repo/scripts/assert-terraform-env.sh
+          ./pipeline-repo/scripts/assert-terraform-env.sh \
+            TF_VAR_confluent_cloud_api_key \
+            TF_VAR_confluent_cloud_api_secret \
+            TF_VAR_kafka_id \
+            TF_VAR_kafka_rest_endpoint \
+            TF_VAR_kafka_api_key \
+            TF_VAR_kafka_api_secret \
+            TF_VAR_schema_registry_id \
+            TF_VAR_schema_registry_rest_endpoint \
+            TF_VAR_schema_registry_api_key \
+            TF_VAR_schema_registry_api_secret \
+            TF_CLOUD_ORGANIZATION \
+            TF_TOKEN_app_terraform_io \
+            PIPELINE_TF_WORKSPACE
+
+      - name: Terraform init
+        working-directory: service-repo/target/terraform
+        run: |
+          unset TF_WORKSPACE
+          terraform init
+
+      - name: Terraform validate
+        working-directory: service-repo/target/terraform
+        run: |
+          unset TF_WORKSPACE
+          terraform validate
+
+      - name: Terraform plan
+        working-directory: service-repo/target/terraform
+        run: |
+          unset TF_WORKSPACE
+          terraform plan -out=tfplan
+
+      - name: Export plan text
+        working-directory: service-repo/target/terraform
+        run: terraform show -no-color tfplan > tfplan.txt
+
+      - name: Export sanitized plan JSON
+        working-directory: service-repo/target/terraform
+        run: |
+          terraform show -json tfplan | jq '{
+            format_version,
+            terraform_version,
+            resource_changes: [
+              .resource_changes[]? | {
+                address,
+                mode,
+                type,
+                name,
+                provider_name,
+                actions: .change.actions,
+                before_sensitive: (.change.before_sensitive // null),
+                after_sensitive: (.change.after_sensitive // null),
+                after_unknown: (.change.after_unknown // null)
+              }
+            ],
+            output_changes: (
+              .output_changes
+              | to_entries
+              | map({
+                  key,
+                  value: {
+                    actions: (.value.actions // []),
+                    sensitive: (.value.sensitive // false)
+                  }
+                })
+            )
+          }' > tfplan.sanitized.json
+
+      - name: Terraform apply on develop
+        if: github.event_name == 'push' && github.ref_name == 'develop'
+        working-directory: service-repo/target/terraform
+        run: |
+          unset TF_WORKSPACE
+          terraform apply -auto-approve tfplan
+
+      - name: Remove raw Terraform plan
+        if: always()
+        working-directory: service-repo/target/terraform
+        run: rm -f tfplan
+
+      - name: Upload generated Terraform
+        if: ${{ inputs.upload_artifact }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.service_repo }}-terraform
+          path: |
+            service-repo/target/terraform
+            !service-repo/target/terraform/.terraform/**
+            !service-repo/target/terraform/tfplan
+          if-no-files-found: error
+
+      - name: Create Terraform bundle
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          cd service-repo
+          zip -r "${{ inputs.service_repo }}-${{ github.ref_name }}-terraform.zip" target/terraform \
+            -x "target/terraform/.terraform/*" \
+               "target/terraform/tfplan"
+
+      - name: Publish release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: ${{ startsWith(github.ref_name, 'rc-') || contains(github.ref_name, '-rc.') }}
+          files: |
+            service-repo/${{ inputs.service_repo }}-${{ github.ref_name }}-terraform.zip
+            service-repo/target/terraform/tfplan.txt
+            service-repo/target/terraform/tfplan.sanitized.json
