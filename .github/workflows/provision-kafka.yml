@@ -22,6 +22,11 @@ on:
         required: false
         default: staging
         type: string
+      avro_imports:
+        description: Comma-separated Avro schema files or folders, relative to the service repository root, loaded before owned schemas are bundled.
+        required: false
+        default: ""
+        type: string
       java_distribution:
         description: Java distribution used by the pipeline.
         required: false
@@ -61,6 +66,7 @@ jobs:
       TF_VAR_schema_registry_rest_endpoint: ${{ vars.CONFLUENT_SCHEMA_REGISTRY_REST_ENDPOINT }}
       TF_VAR_schema_registry_api_key: ${{ secrets.CONFLUENT_SCHEMA_REGISTRY_API_KEY }}
       TF_VAR_schema_registry_api_secret: ${{ secrets.CONFLUENT_SCHEMA_REGISTRY_API_SECRET }}
+      AVRO_IMPORTS: ${{ inputs.avro_imports }}
 
     steps:
       - name: Checkout service repository

@@ -7,3 +7,5 @@ Thumbs.db
 *.log
 *.tmp
 *.bak
+/.env.confluent-ci
+/.env.terraform-cloud

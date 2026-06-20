@@ -44,6 +44,56 @@ Workspace naming is per repository and environment:
 - `<repo>-pre`
 - `<repo>-prod`
 
+## Bootstrap Confluent CI environment
+
+Use `scripts/bootstrap-confluent-ci.sh` to create or reuse the low-volume Confluent Cloud resources used by CI and write Terraform-compatible exports to `.env.confluent-ci`.
+
+Prerequisites:
+
+- `confluent` CLI authenticated with `confluent login`
+- `jq`
+- `gh` authenticated with `gh auth login`, only when using `--github-secrets`
+
+Generate the local env file:
+
+```bash
+./scripts/bootstrap-confluent-ci.sh
+source .env.confluent-ci
+```
+
+The generated `.env.confluent-ci` file contains these required Confluent Terraform variables:
+
+```bash
+export TF_VAR_confluent_cloud_api_key="..."
+export TF_VAR_confluent_cloud_api_secret="..."
+export TF_VAR_kafka_id="..."
+export TF_VAR_kafka_rest_endpoint="..."
+export TF_VAR_kafka_api_key="..."
+export TF_VAR_kafka_api_secret="..."
+export TF_VAR_schema_registry_id="..."
+export TF_VAR_schema_registry_rest_endpoint="..."
+export TF_VAR_schema_registry_api_key="..."
+export TF_VAR_schema_registry_api_secret="..."
+```
+
+Terraform Cloud also requires:
+
+```bash
+export TF_CLOUD_ORGANIZATION="arcadia-editions"
+export TF_TOKEN_app_terraform_io="..."
+```
+
+For GitHub Actions, the reusable workflow validates all of the variables above plus `PIPELINE_TF_WORKSPACE`, which the workflow derives from the service repository and target server.
+
+Useful options:
+
+- `--github-secrets`: store generated values with GitHub CLI.
+- `--repo owner/repo`: store secrets in one repository.
+- `--org org-slug`: store organization secrets. Defaults to `arcadia-editions`.
+- `--rotate-keys`: create fresh API keys instead of reusing `.env.confluent-ci`.
+- `--print`: print exports to stdout.
+- `--dry-run`: show intended actions without creating resources or writing secrets.
+
 ## Notes
 
 - AsyncAPI is the source of truth.
