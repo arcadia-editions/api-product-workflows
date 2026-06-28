@@ -5,9 +5,18 @@ Files in this folder are copied into every generated Terraform bundle.
 Current overlay contents:
 - `cloud.tftpl`: template rendered into `cloud.tf` with organization and workspace name
 - `provider.tf`: Confluent provider configuration
-- `variables.tf`: provider and schema inputs
+- `variables.tf`: provider and schema inputs, including `provisioned_from`
 - `defaults.auto.tfvars`: shared non-sensitive defaults
-- `outputs.tf`: basic traceability outputs
+- `outputs.tf`: traceability outputs, including `provisioned_from`
+
+## Deployment-state traceability
+
+`provisioned_from` is set via `TF_VAR_provisioned_from` by the calling workflow, not by AsyncAPI or the manifest:
+- `develop` sets it to the git ref/sha that was applied.
+- `pre` sets it to the `release/asyncapi-all/vX` version being promoted.
+- `prod` never sets it explicitly; the promotion workflow reads it back from the `pre` workspace's own output and applies the identical value (and the identical generated Terraform) to `prod`, so the two environments cannot silently diverge.
+
+This is deliberately separate from the architecture manifest, whose `asyncapi`/`asyncapi-client` member versions advance together when the bundle is released and are never updated by deployment.
 
 ## Simplified contract
 
@@ -38,6 +47,7 @@ Service-specific overlays may override shared defaults through `terraform/servic
   - `CONFLUENT_KAFKA_CLUSTER_ID`
   - `CONFLUENT_KAFKA_REST_ENDPOINT`
   - `CONFLUENT_SCHEMA_REGISTRY_ID`
+  - `CONFLUENT_SCHEMA_REGISTRY_CRN`
   - `CONFLUENT_SCHEMA_REGISTRY_REST_ENDPOINT`
 
 ## Workspace naming

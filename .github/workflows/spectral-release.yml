@@ -1,0 +1,84 @@
+name: Release Spectral bundle
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version without v or spectral prefix.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.repository }}-spectral
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    environment: artifact-releases
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      INPUT_VERSION: ${{ inputs.version }}
+    steps:
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up pinned Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22.17.0"
+          cache: npm
+          cache-dependency-path: spectral/package-lock.json
+
+      - name: Validate release version and tag availability
+        shell: bash
+        run: |
+          release="$INPUT_VERSION"
+          [[ "$release" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]] || {
+            echo "release version $release is not valid semantic versioning" >&2
+            exit 1
+          }
+          if git rev-parse -q --verify "refs/tags/spectral/v$release" >/dev/null; then
+            echo "tag spectral/v$release already exists" >&2
+            exit 1
+          fi
+
+      - name: Build and verify the bundle
+        shell: bash
+        run: |
+          cd spectral
+          npm ci
+          npm run bundle
+          npm run verify:bundle
+          cd dist
+          sha256sum spectral.js > spectral.js.sha256
+
+      - name: Tag and publish the release
+        shell: bash
+        run: |
+          tag="spectral/v$INPUT_VERSION"
+          git config user.name 'arcadia-editions-release[bot]'
+          git config user.email 'arcadia-editions-release[bot]@users.noreply.github.com'
+          gh auth setup-git
+          git add -f spectral/dist/spectral.js spectral/dist/spectral.js.sha256
+          git commit -m "spectral v$INPUT_VERSION"
+          git tag -a "$tag" -m "spectral v$INPUT_VERSION"
+          git push origin "$tag"
+
+          flags=(--verify-tag --latest=false --generate-notes)
+          [[ "$INPUT_VERSION" != *-* ]] || flags+=(--prerelease)
+          bundle_url="https://github.com/$GITHUB_REPOSITORY/raw/refs/tags/$tag/spectral/dist/spectral.js"
+
+          gh release create "$tag" --title "spectral v$INPUT_VERSION" \
+            --notes "Use Spectral Bundle at: $bundle_url" \
+            "${flags[@]}" \
+            spectral/dist/spectral.js spectral/dist/spectral.js.sha256

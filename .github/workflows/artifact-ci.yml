@@ -1,0 +1,132 @@
+name: Artifact validation
+
+on:
+  workflow_call:
+    inputs:
+      workflow_ref:
+        description: Immutable api-product-workflows commit SHA or release tag.
+        required: true
+        type: string
+      architecture_manifest_uri:
+        required: false
+        default: https://raw.githubusercontent.com/arcadia-editions/arcadia-editions-architecture/main/zenwave-architecture.yml
+        type: string
+      base_sha:
+        required: false
+        default: ""
+        type: string
+      head_sha:
+        required: false
+        default: ""
+        type: string
+      full_validation:
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      checkout_token:
+        required: false
+    outputs:
+      plan:
+        description: Manifest artifacts affected by this change.
+        value: ${{ jobs.validate.outputs.plan }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: artifact-validation-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    outputs:
+      plan: ${{ steps.detect.outputs.plan }}
+      has_kafka_artifacts: ${{ steps.kafka-detect.outputs.has_kafka_artifacts }}
+    env:
+      SPECTRAL_BUNDLE_URL: ${{ vars.SPECTRAL_BUNDLE_URL }}
+    steps:
+      - name: Check out caller commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: source
+          ref: ${{ inputs.head_sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out trusted workflow implementation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: arcadia-editions/api-product-workflows
+          ref: ${{ inputs.workflow_ref }}
+          token: ${{ secrets.checkout_token || github.token }}
+          path: pipeline
+          persist-credentials: false
+
+      - name: Set up Java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up JBang
+        uses: jbangdev/setup-jbang@cc28889678db839e29433f42f9ff25f148b6d8de # main
+        with:
+          version: 0.138.0
+
+      - name: Set up validation tools
+        shell: bash
+        run: chmod +x pipeline/scripts/artifacts/*.sh
+
+      - name: Detect changed manifest artifacts
+        id: detect
+        shell: bash
+        env:
+          MANIFEST_URI: ${{ inputs.architecture_manifest_uri }}
+          BASE_SHA: ${{ inputs.base_sha || github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ inputs.head_sha || github.sha }}
+          FULL_VALIDATION: ${{ inputs.full_validation }}
+        run: |
+          repository="${GITHUB_REPOSITORY#*/}"
+          pipeline/scripts/artifacts/detect-changes.sh \
+            source "$MANIFEST_URI" "$repository" "$BASE_SHA" "$HEAD_SHA" "$FULL_VALIDATION"
+
+      - name: Lint and validate changed artifacts
+        env:
+          PLAN_JSON: ${{ steps.detect.outputs.plan }}
+        shell: bash
+        run: |
+          pipeline/scripts/artifacts/execute-plan.sh \
+            ci "$PLAN_JSON" source pipeline pipeline/config/maven-settings.xml source/target/artifacts
+
+      - name: Detect Kafka-relevant artifacts
+        id: kafka-detect
+        shell: bash
+        env:
+          PLAN_JSON: ${{ steps.detect.outputs.plan }}
+        run: |
+          has_kafka="$(jq -r 'any(.[]; .type == "asyncapi" or .type == "asyncapi-client")' <<< "$PLAN_JSON")"
+          echo "has_kafka_artifacts=$has_kafka" >> "$GITHUB_OUTPUT"
+
+  kafka-plan:
+    name: Provision Kafka (plan)
+    needs: validate
+    if: needs.validate.outputs.has_kafka_artifacts == 'true'
+    uses: ./.github/workflows/provision-kafka-plan.yml
+    with:
+      service_repo: ${{ github.event.repository.name }}
+      pipeline_ref: ${{ inputs.workflow_ref }}
+      architecture_manifest_uri: ${{ inputs.architecture_manifest_uri }}
+    secrets: inherit
+
+  kafka-develop:
+    name: Provision Kafka (develop)
+    needs: kafka-plan
+    if: needs.validate.outputs.has_kafka_artifacts == 'true' && github.ref_name == 'develop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    uses: ./.github/workflows/provision-kafka-develop.yml
+    with:
+      service_repo: ${{ github.event.repository.name }}
+      pipeline_ref: ${{ inputs.workflow_ref }}
+      architecture_manifest_uri: ${{ inputs.architecture_manifest_uri }}
+    secrets: inherit

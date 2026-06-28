@@ -1,0 +1,140 @@
+name: Release Kafka provisioning bundle
+
+on:
+  workflow_call:
+    inputs:
+      service_repo:
+        description: Repository name inside the arcadia-editions org.
+        required: true
+        type: string
+      version:
+        description: Released version from release/asyncapi-all/vX.
+        required: true
+        type: string
+      pipeline_ref:
+        description: Git ref to use when checking out the shared pipeline repository.
+        required: false
+        default: main
+        type: string
+      architecture_manifest_uri:
+        required: false
+        default: https://raw.githubusercontent.com/arcadia-editions/arcadia-editions-architecture/main/zenwave-architecture.yml
+        type: string
+      avro_imports:
+        description: Comma-separated Avro schema files or folders, relative to the source repository root, loaded before owned schemas are bundled.
+        required: false
+        default: ""
+        type: string
+      java_distribution:
+        required: false
+        default: temurin
+        type: string
+      java_version:
+        required: false
+        default: "21"
+        type: string
+    secrets:
+      checkout_token:
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: kafka-release-${{ github.repository }}-asyncapi-all
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build Terraform bundle
+    runs-on: ubuntu-latest
+    env:
+      AVRO_IMPORTS: ${{ inputs.avro_imports }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout shared pipeline repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: arcadia-editions/api-product-workflows
+          ref: ${{ inputs.pipeline_ref }}
+          token: ${{ secrets.checkout_token || github.token }}
+          path: pipeline-repo
+
+      - name: Set up Java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: ${{ inputs.java_distribution }}
+          java-version: ${{ inputs.java_version }}
+
+      - name: Set up JBang
+        uses: jbangdev/setup-jbang@cc28889678db839e29433f42f9ff25f148b6d8de # main
+        with:
+          version: 0.138.0
+
+      - name: Install ZenWave CLI alias
+        uses: ./pipeline-repo/.github/actions/install-zenwave-alias
+        with:
+          alias: ${{ vars.ZENWAVE_ALIAS || 'release@zenwave360/zenwave-sdk' }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+
+      - name: Resolve Kafka contracts from the architecture manifest
+        id: resolve
+        shell: bash
+        env:
+          MANIFEST_URI: ${{ inputs.architecture_manifest_uri }}
+        run: |
+          repository="${{ inputs.service_repo }}"
+          records="$(jbang --quiet ./pipeline-repo/scripts/artifacts/ManifestTool.java resolve "$MANIFEST_URI" "$repository" asyncapi-all)"
+          echo "paths=$(jq -r 'map(.path) | join(",")' <<< "$records")" >> "$GITHUB_OUTPUT"
+          echo "members=$(jq -c '[.[] | {artifactId,type,path}]' <<< "$records")" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout released AsyncAPI bundle
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: arcadia-editions/${{ inputs.service_repo }}
+          ref: refs/tags/release/asyncapi-all/v${{ inputs.version }}
+          path: service-repo
+
+      - name: Generate Terraform from AsyncAPI
+        shell: bash
+        run: |
+          chmod +x ./pipeline-repo/scripts/terraform/provision-kafka.sh
+          cd service-repo
+          ../pipeline-repo/scripts/terraform/provision-kafka.sh \
+            ../pipeline-repo \
+            "${{ steps.resolve.outputs.paths }}" \
+            prod \
+            "${{ inputs.service_repo }}"
+
+      - name: Sanity-check generated Terraform offline
+        working-directory: service-repo/target/terraform
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+      - name: Record bundle provenance
+        shell: bash
+        run: |
+          jq -n \
+            --arg version "${{ inputs.version }}" \
+            --argjson members '${{ steps.resolve.outputs.members }}' \
+            '{artifact_id:"asyncapi-all", version:$version, members:$members}' \
+            > "service-repo/target/terraform/RELEASE.json"
+
+      - name: Create Terraform bundle
+        shell: bash
+        run: |
+          cd service-repo
+          zip -r "${{ inputs.service_repo }}-asyncapi-all-v${{ inputs.version }}-terraform.zip" \
+            "target/terraform" \
+            -x "target/terraform/.terraform/*"
+
+      - name: Attach Terraform bundle to AsyncAPI release
+        shell: bash
+        run: |
+          tag="release/asyncapi-all/v${{ inputs.version }}"
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null
+          gh release upload "$tag" --repo "$GITHUB_REPOSITORY" \
+            "service-repo/${{ inputs.service_repo }}-asyncapi-all-v${{ inputs.version }}-terraform.zip"

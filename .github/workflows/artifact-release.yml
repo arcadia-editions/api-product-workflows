@@ -1,0 +1,252 @@
+name: Release artifact, AsyncAPI bundle, or service snapshot
+
+on:
+  workflow_call:
+    inputs:
+      workflow_ref:
+        description: Immutable api-product-workflows commit SHA or release tag.
+        required: true
+        type: string
+      artifact:
+        description: ArtifactId, asyncapi-all for Kafka contracts, or service-all for a complete service snapshot.
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      default_branch:
+        required: false
+        default: main
+        type: string
+      architecture_manifest_uri:
+        required: false
+        default: https://raw.githubusercontent.com/arcadia-editions/arcadia-editions-architecture/main/zenwave-architecture.yml
+        type: string
+      architecture_repository:
+        required: false
+        default: arcadia-editions/arcadia-editions-architecture
+        type: string
+    secrets:
+      checkout_token:
+        required: false
+      release_token:
+        required: false
+      architecture_token:
+        required: true
+      maven_username:
+        required: false
+      maven_password_or_token:
+        required: false
+      apicurio_username:
+        required: false
+      apicurio_password_or_token:
+        required: false
+      artifactory_username:
+        required: false
+      artifactory_password_or_token:
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.repository }}-${{ inputs.artifact }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    environment: artifact-releases
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ secrets.release_token || github.token }}
+      MANIFEST_URI: ${{ inputs.architecture_manifest_uri }}
+      ARTIFACT_ID: ${{ inputs.artifact }}
+      RELEASE_VERSION: ${{ inputs.version }}
+      DEFAULT_BRANCH: ${{ inputs.default_branch }}
+      ARCHITECTURE_REPOSITORY: ${{ inputs.architecture_repository }}
+      MAVEN_REPOSITORY_URL: ${{ vars.MAVEN_RELEASE_REPOSITORY_URL }}
+      MAVEN_REPOSITORY_ID: ${{ vars.MAVEN_RELEASE_REPOSITORY_ID }}
+      MAVEN_REPOSITORY_USERNAME: ${{ secrets.maven_username }}
+      MAVEN_REPOSITORY_PASSWORD_OR_TOKEN: ${{ secrets.maven_password_or_token }}
+      APICURIO_REGISTRY_URL: ${{ vars.APICURIO_REGISTRY_URL }}
+      APICURIO_USERNAME: ${{ secrets.apicurio_username }}
+      APICURIO_PASSWORD_OR_TOKEN: ${{ secrets.apicurio_password_or_token }}
+      ARTIFACTORY_GENERIC_RELEASE_URL: ${{ vars.ARTIFACTORY_GENERIC_RELEASE_URL }}
+      ARTIFACTORY_USERNAME: ${{ secrets.artifactory_username }}
+      ARTIFACTORY_PASSWORD_OR_TOKEN: ${{ secrets.artifactory_password_or_token }}
+      SPECTRAL_BUNDLE_URL: ${{ vars.SPECTRAL_BUNDLE_URL }}
+    steps:
+      - name: Check out trusted main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: source
+          ref: ${{ inputs.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out trusted workflow implementation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: arcadia-editions/api-product-workflows
+          ref: ${{ inputs.workflow_ref }}
+          token: ${{ secrets.checkout_token || github.token }}
+          path: pipeline
+          persist-credentials: false
+
+      - name: Set up Java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up JBang
+        uses: jbangdev/setup-jbang@cc28889678db839e29433f42f9ff25f148b6d8de # main
+        with:
+          version: 0.138.0
+
+      - name: Install pinned tools
+        shell: bash
+        run: chmod +x pipeline/scripts/artifacts/*.sh
+
+      - name: Resolve release plan and verify inputs
+        id: preflight
+        shell: bash
+        run: |
+          repository="${GITHUB_REPOSITORY#*/}"
+          if [[ "$ARTIFACT_ID" == "service-all" ]]; then
+            plan="$(jbang --quiet pipeline/scripts/artifacts/ManifestTool.java resolve "$MANIFEST_URI" "$repository" service-all)"
+          elif [[ "$ARTIFACT_ID" == "asyncapi-all" ]]; then
+            plan="$(jbang --quiet pipeline/scripts/artifacts/ManifestTool.java resolve "$MANIFEST_URI" "$repository" asyncapi-all)"
+          else
+            record="$(jbang --quiet pipeline/scripts/artifacts/ManifestTool.java resolve "$MANIFEST_URI" "$repository" "$ARTIFACT_ID")"
+            [[ "$(jq -r .type <<< "$record")" != "asyncapi" && "$(jq -r .type <<< "$record")" != "asyncapi-client" ]] || {
+              echo "asyncapi and asyncapi-client artifacts are released through asyncapi-all" >&2
+              exit 1
+            }
+            plan="[$record]"
+          fi
+          pipeline/scripts/artifacts/verify-release-plan.sh \
+            source "$plan" "$ARTIFACT_ID" "$RELEASE_VERSION" "$DEFAULT_BRANCH"
+          echo "plan=$(jq -c . <<< "$plan")" >> "$GITHUB_OUTPUT"
+
+      - name: Create release commit
+        env:
+          PLAN: ${{ steps.preflight.outputs.plan }}
+          RELEASE_REF: ${{ steps.preflight.outputs.ref }}
+        shell: bash
+        run: |
+          git -C source config user.name 'arcadia-editions-release[bot]'
+          git -C source config user.email 'arcadia-editions-release[bot]@users.noreply.github.com'
+          git -C source switch -c "$RELEASE_REF"
+          paths=()
+          while IFS= read -r record; do
+            type="$(jq -r .type <<< "$record")"
+            path="$(jq -r .path <<< "$record")"
+            if [[ "$ARTIFACT_ID" != "service-all" ]]; then
+              pipeline/scripts/artifacts/set-version.sh source "$type" "$path" "$RELEASE_VERSION"
+              paths+=("$path")
+            fi
+          done < <(jq -c '.[]' <<< "$PLAN")
+          pipeline/scripts/artifacts/execute-plan.sh \
+            ci "$PLAN" source pipeline pipeline/config/maven-settings.xml source/target/artifacts \
+            "$ARTIFACT_ID" "$RELEASE_VERSION"
+          if (( ${#paths[@]} > 0 )); then
+            git -C source add -- "${paths[@]}"
+          fi
+          git -C source commit --allow-empty -m "Release $ARTIFACT_ID $RELEASE_VERSION"
+          gh auth setup-git
+          git -C source push origin "HEAD:refs/heads/$RELEASE_REF"
+
+      - name: Merge release commit to main
+        id: merge
+        env:
+          RELEASE_REF: ${{ steps.preflight.outputs.ref }}
+        shell: bash
+        run: |
+          pr_url="$(gh pr create --repo "$GITHUB_REPOSITORY" --base "$DEFAULT_BRANCH" --head "$RELEASE_REF" \
+            --title "Release $ARTIFACT_ID $RELEASE_VERSION" \
+            --body "Merge the released $ARTIFACT_ID $RELEASE_VERSION source into $DEFAULT_BRANCH.")"
+          for attempt in $(seq 1 120); do
+            pr="$(gh pr view "$pr_url" --repo "$GITHUB_REPOSITORY" --json state,mergeCommit)"
+            if [[ "$(jq -r .state <<< "$pr")" == "MERGED" ]]; then
+              merge_commit="$(jq -r '.mergeCommit.oid // empty' <<< "$pr")"
+              [[ -n "$merge_commit" ]] || { echo 'merged PR has no merge commit' >&2; exit 1; }
+              echo "commit=$merge_commit" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            gh pr merge "$pr_url" --repo "$GITHUB_REPOSITORY" --merge --delete-branch || true
+            sleep 30
+          done
+          echo 'release PR did not merge before timeout' >&2
+          exit 1
+
+      - name: Tag released main commit
+        env:
+          RELEASE_REF: ${{ steps.preflight.outputs.ref }}
+          MERGE_COMMIT: ${{ steps.merge.outputs.commit }}
+        shell: bash
+        run: |
+          git -C source fetch origin "$DEFAULT_BRANCH"
+          git -C source cat-file -e "$MERGE_COMMIT^{commit}"
+          git -C source tag -a "$RELEASE_REF" "$MERGE_COMMIT" -m "$ARTIFACT_ID v$RELEASE_VERSION"
+          git -C source push origin "refs/tags/$RELEASE_REF"
+          git -C source checkout --detach "$MERGE_COMMIT"
+
+      - name: Publish selected artifact
+        id: publish
+        env:
+          PLAN: ${{ steps.preflight.outputs.plan }}
+        shell: bash
+        run: |
+          pipeline/scripts/artifacts/execute-plan.sh \
+            release "$PLAN" source pipeline pipeline/config/maven-settings.xml source/target/release \
+            "$ARTIFACT_ID" "$RELEASE_VERSION"
+
+      - name: Create GitHub release
+        env:
+          RELEASE_REF: ${{ steps.preflight.outputs.ref }}
+          PACKAGES: ${{ steps.publish.outputs.packages }}
+        shell: bash
+        run: |
+          mapfile -t assets < <(jq -r '.[] | .jar, .checksumFile' <<< "$PACKAGES")
+          flags=(--verify-tag --generate-notes)
+          if [[ "$ARTIFACT_ID" == "service-all" ]]; then
+            flags+=(--latest)
+          else
+            flags+=(--latest=false)
+          fi
+          [[ "$RELEASE_VERSION" != *-* ]] || flags+=(--prerelease)
+          gh release create "$RELEASE_REF" --repo "$GITHUB_REPOSITORY" \
+            --title "$ARTIFACT_ID v$RELEASE_VERSION" "${flags[@]}" "${assets[@]}"
+
+      - name: Request architecture manifest update
+        env:
+          ARCHITECTURE_TOKEN: ${{ secrets.architecture_token }}
+          PLAN: ${{ steps.preflight.outputs.plan }}
+        shell: bash
+        run: |
+          repository="${GITHUB_REPOSITORY#*/}"
+          artifact_ids="$(jq -c '[.[].artifactId]' <<< "$PLAN")"
+          jq -n \
+            --arg repository "$repository" --arg artifactId "$ARTIFACT_ID" \
+            --arg version "$RELEASE_VERSION" --argjson artifactIds "$artifact_ids" \
+            '{event_type:"artifact-released",client_payload:{repository:$repository,artifactId:$artifactId,artifactIds:$artifactIds,version:$version}}' \
+            | GH_TOKEN="$ARCHITECTURE_TOKEN" gh api "repos/$ARCHITECTURE_REPOSITORY/dispatches" --input -
+
+  release-kafka:
+    name: Attach combined Terraform bundle
+    needs: release
+    if: inputs.artifact == 'asyncapi-all'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/provision-kafka-release.yml
+    with:
+      service_repo: ${{ github.event.repository.name }}
+      version: ${{ inputs.version }}
+      pipeline_ref: ${{ inputs.workflow_ref }}
+      architecture_manifest_uri: ${{ inputs.architecture_manifest_uri }}
+    secrets:
+      checkout_token: ${{ secrets.checkout_token }}

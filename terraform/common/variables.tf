@@ -58,3 +58,9 @@ variable "default_compatibility" {
   description = "Default schema compatibility applied when the generated resources do not override it."
   type        = string
 }
+
+variable "provisioned_from" {
+  description = "Identifier of the source content this apply was generated from: an AsyncAPI release version (release/asyncapi-all/vX) for pre/prod, or a git ref/sha for continuous develop. Read back by promotion to mirror pre into prod without re-typing versions."
+  type        = string
+  default     = ""
+}
