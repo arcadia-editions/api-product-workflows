@@ -1,0 +1,155 @@
+name: Architecture manifest release metadata
+
+on:
+  workflow_call:
+    inputs:
+      workflow_ref:
+        required: true
+        type: string
+      service_repository:
+        required: true
+        type: string
+      artifact:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      source_tag:
+        required: true
+        type: string
+      release_url:
+        required: true
+        type: string
+      packages:
+        required: true
+        type: string
+      architecture_repository:
+        required: false
+        default: arcadia-editions/arcadia-editions-docs
+        type: string
+      manifest_path:
+        required: false
+        default: zenwave-architecture.yml
+        type: string
+    secrets:
+      checkout_token:
+        required: false
+      architecture_token:
+        required: true
+  workflow_dispatch:
+    inputs:
+      workflow_ref:
+        required: true
+        type: string
+      service_repository:
+        required: true
+        type: string
+      artifact:
+        required: true
+        type: choice
+        options: [zdl, openapi, asyncapi, api-product]
+      version:
+        required: true
+        type: string
+      source_tag:
+        required: true
+        type: string
+      release_url:
+        required: true
+        type: string
+      packages:
+        required: true
+        type: string
+      architecture_repository:
+        required: false
+        default: arcadia-editions/arcadia-editions-docs
+        type: string
+      manifest_path:
+        required: false
+        default: zenwave-architecture.yml
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: manifest-${{ inputs.service_repository }}-${{ inputs.artifact }}
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    environment: architecture-manifest
+    permissions:
+      contents: read
+    env:
+      ARCHITECTURE_TOKEN: ${{ secrets.architecture_token }}
+      INPUT_SERVICE_REPOSITORY: ${{ inputs.service_repository }}
+      INPUT_ARTIFACT: ${{ inputs.artifact }}
+      INPUT_VERSION: ${{ inputs.version }}
+      INPUT_SOURCE_TAG: ${{ inputs.source_tag }}
+      INPUT_RELEASE_URL: ${{ inputs.release_url }}
+      INPUT_PACKAGES: ${{ inputs.packages }}
+      INPUT_ARCHITECTURE_REPOSITORY: ${{ inputs.architecture_repository }}
+      INPUT_MANIFEST_PATH: ${{ inputs.manifest_path }}
+    steps:
+      - name: Check out architecture repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ inputs.architecture_repository }}
+          ref: main
+          token: ${{ secrets.architecture_token }}
+          path: architecture
+          persist-credentials: false
+
+      - name: Check out trusted workflow implementation
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: arcadia-editions/api-product-workflows
+          ref: ${{ inputs.workflow_ref }}
+          token: ${{ secrets.checkout_token || github.token }}
+          path: pipeline
+          persist-credentials: false
+
+      - name: Set up pinned JDK
+        uses: actions/setup-java@7a445ee88d4e23b52c33c877a462a2f6773c8420
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up pinned JBang
+        shell: bash
+        run: |
+          chmod +x pipeline/scripts/artifacts/setup-jbang.sh
+          pipeline/scripts/artifacts/setup-jbang.sh 0.138.0
+
+      - name: Apply closed manifest update
+        shell: bash
+        run: |
+          chmod +x pipeline/scripts/artifacts/*.sh
+          pipeline/scripts/artifacts/update-architecture-manifest.sh \
+            architecture "$INPUT_SERVICE_REPOSITORY" "$INPUT_ARTIFACT" \
+            "$INPUT_VERSION" "$INPUT_MANIFEST_PATH"
+
+      - name: Validate against published architecture schema
+        shell: bash
+        run: |
+          curl --fail --location --silent --show-error \
+            https://schemas.zenwave360.io/zenwave-architecture/latest/schema.json \
+            --output "$RUNNER_TEMP/zenwave-architecture.schema.json"
+          jbang --quiet pipeline/scripts/artifacts/YamlToJson.kt \
+            "architecture/$INPUT_MANIFEST_PATH" > "$RUNNER_TEMP/zenwave-architecture.json"
+          npx --yes ajv-cli@5.0.0 validate --spec=draft2020 --strict=false \
+            -s "$RUNNER_TEMP/zenwave-architecture.schema.json" \
+            -d "$RUNNER_TEMP/zenwave-architecture.json"
+
+      - name: Open or reuse architecture pull request
+        id: pr
+        shell: bash
+        run: |
+          pipeline/scripts/artifacts/open-architecture-pr.sh \
+            architecture "$INPUT_ARCHITECTURE_REPOSITORY" \
+            "$INPUT_SERVICE_REPOSITORY" "$INPUT_ARTIFACT" "$INPUT_VERSION" \
+            "$INPUT_SOURCE_TAG" "$INPUT_RELEASE_URL" "$INPUT_PACKAGES" \
+            "$INPUT_MANIFEST_PATH"

@@ -1,0 +1,5 @@
+
+extends:
+  - [rules/openapi/openapi-rules.yml, recommended]
+  - [rules/asyncapi/asyncapi-rules.yml, recommended]
+

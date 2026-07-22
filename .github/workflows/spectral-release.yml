@@ -1,0 +1,163 @@
+name: Release Spectral bundle
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version without v or spectral prefix.
+        required: true
+        type: string
+      development-version:
+        description: Explicit next version ending in -SNAPSHOT.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.repository }}-spectral
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    environment: artifact-releases
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      INPUT_VERSION: ${{ inputs.version }}
+      INPUT_DEVELOPMENT_VERSION: ${{ inputs['development-version'] }}
+    steps:
+      - name: Check out main
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up pinned Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22.17.0"
+          cache: npm
+          cache-dependency-path: spectral/package-lock.json
+
+      - name: Validate explicit version transition
+        shell: bash
+        run: |
+          release="$INPUT_VERSION"
+          development="$INPUT_DEVELOPMENT_VERSION"
+          [[ "$release" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]] || {
+            echo "release version $release is not valid semantic versioning" >&2
+            exit 1
+          }
+          [[ "$development" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-SNAPSHOT$ ]] || {
+            echo "development version $development must be a semantic version ending in -SNAPSHOT" >&2
+            exit 1
+          }
+          current="$(node -p "require('./spectral/package.json').version")"
+          [[ "$current" == "$release-SNAPSHOT" ]] || { echo "current Spectral version $current is not $release-SNAPSHOT" >&2; exit 1; }
+          if git rev-parse -q --verify "refs/tags/spectral/v$release" >/dev/null; then
+            echo "tag spectral/v$release already exists" >&2
+            exit 1
+          fi
+
+      - name: Create isolated release commit and release PR branch
+        id: prepare
+        shell: bash
+        run: |
+          base_commit="$(git rev-parse HEAD)"
+          release_commit_branch="release-commit/spectral/v$INPUT_VERSION"
+          release_branch="release/spectral/v$INPUT_VERSION"
+          if git ls-remote --exit-code --heads origin "$release_branch" >/dev/null 2>&1; then
+            echo "::error::Branch $release_branch already exists on origin. Delete the stale branch before retrying the release."
+            exit 1
+          fi
+          git config user.name 'arcadia-editions-release[bot]'
+          git config user.email 'arcadia-editions-release[bot]@users.noreply.github.com'
+          git switch -c "$release_commit_branch" "$base_commit"
+          cd spectral
+          npm pkg set version="$INPUT_VERSION"
+          npm install --package-lock-only --ignore-scripts
+          npm ci
+          npm run bundle
+          npm run verify:bundle
+          cd ..
+          [[ "$(git branch --show-current)" == "$release_commit_branch" ]]
+          git add spectral/package.json spectral/package-lock.json
+          git add -f spectral/dist/spectral.js
+          git commit -m "Release spectral $INPUT_VERSION"
+          release_commit="$(git rev-parse HEAD)"
+
+          git switch --detach "$base_commit"
+          git switch -c "$release_branch"
+          cd spectral
+          npm pkg set version="$INPUT_DEVELOPMENT_VERSION"
+          npm install --package-lock-only --ignore-scripts
+          npm ci
+          npm run bundle
+          npm run verify:bundle
+          rm -f dist/spectral.js
+          cd ..
+          [[ "$(git branch --show-current)" == "$release_branch" ]]
+          git add spectral/package.json spectral/package-lock.json
+          git commit -m "Prepare spectral $INPUT_DEVELOPMENT_VERSION"
+          development_commit="$(git rev-parse HEAD)"
+          gh auth setup-git
+          git push --set-upstream origin "$release_branch"
+          echo "base_commit=$base_commit" >> "$GITHUB_OUTPUT"
+          echo "release_branch=$release_branch" >> "$GITHUB_OUTPUT"
+          echo "development_commit=$development_commit" >> "$GITHUB_OUTPUT"
+          echo "release_commit=$release_commit" >> "$GITHUB_OUTPUT"
+
+      - name: Merge release PR through branch protection
+        env:
+          RELEASE_BRANCH: ${{ steps.prepare.outputs.release_branch }}
+        shell: bash
+        run: |
+          pr_url="$(gh pr create --base main --head "$RELEASE_BRANCH" \
+            --title "Prepare spectral $INPUT_DEVELOPMENT_VERSION" \
+            --body "Prepare Spectral $INPUT_DEVELOPMENT_VERSION after releasing $INPUT_VERSION. The release commit is published separately through tag spectral/v$INPUT_VERSION.")"
+          for attempt in $(seq 1 240); do
+            state="$(gh pr view "$pr_url" --json state --jq .state)"
+            [[ "$state" != 'MERGED' ]] || break
+            [[ "$state" == 'OPEN' ]] || exit 1
+            if gh pr merge "$pr_url" --merge --delete-branch; then
+              break
+            fi
+            sleep 30
+          done
+          [[ "$(gh pr view "$pr_url" --json state --jq .state)" == 'MERGED' ]]
+
+      - name: Tag preserved release commit and publish bundle
+        env:
+          BASE_COMMIT: ${{ steps.prepare.outputs.base_commit }}
+          DEVELOPMENT_COMMIT: ${{ steps.prepare.outputs.development_commit }}
+          RELEASE_COMMIT: ${{ steps.prepare.outputs.release_commit }}
+        shell: bash
+        run: |
+          tag="spectral/v$INPUT_VERSION"
+          git fetch origin main
+          [[ "$(git rev-parse "$RELEASE_COMMIT^")" == "$BASE_COMMIT" ]] || {
+            echo "release commit $RELEASE_COMMIT is not based directly on $BASE_COMMIT" >&2
+            exit 1
+          }
+          git merge-base --is-ancestor "$DEVELOPMENT_COMMIT" FETCH_HEAD || {
+            echo "next-development commit $DEVELOPMENT_COMMIT is not on main" >&2
+            exit 1
+          }
+          git tag -a "$tag" "$RELEASE_COMMIT" -m "spectral v$INPUT_VERSION"
+          git push origin "$tag"
+          git switch --detach "$RELEASE_COMMIT"
+          test -s spectral/dist/spectral.js
+          cd spectral/dist
+          sha256sum spectral.js > spectral.js.sha256
+          cd ../..
+          flags=(--latest=false)
+          [[ "$INPUT_VERSION" != *-* ]] || flags+=(--prerelease)
+          gh release create "$tag" --title "spectral v$INPUT_VERSION" \
+            --verify-tag --generate-notes "${flags[@]}" \
+            spectral/dist/spectral.js spectral/dist/spectral.js.sha256

@@ -1,0 +1,5 @@
+formats:
+  - oas3
+
+extends:
+  - [spectral:oas, recommended]

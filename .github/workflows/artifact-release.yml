@@ -1,0 +1,308 @@
+name: Release artifact
+
+on:
+  workflow_call:
+    inputs:
+      workflow_ref:
+        description: Immutable api-product-workflows commit SHA or release tag.
+        required: true
+        type: string
+      service_repository:
+        required: true
+        type: string
+      artifact:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      development_version:
+        required: true
+        type: string
+      default_branch:
+        required: false
+        default: main
+        type: string
+      architecture_repository:
+        required: false
+        default: arcadia-editions/arcadia-editions-docs
+        type: string
+      architecture_ref:
+        required: false
+        default: main
+        type: string
+      architecture_manifest_path:
+        required: false
+        default: zenwave-architecture.yml
+        type: string
+    secrets:
+      checkout_token:
+        required: false
+      release_token:
+        required: false
+      architecture_token:
+        required: false
+      maven_username:
+        required: false
+      maven_password_or_token:
+        required: false
+      apicurio_username:
+        required: false
+      apicurio_password_or_token:
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.repository }}-${{ inputs.artifact }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    environment: artifact-releases
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ secrets.release_token || github.token }}
+      MAVEN_REPOSITORY_URL: ${{ vars.MAVEN_RELEASE_REPOSITORY_URL }}
+      MAVEN_REPOSITORY_ID: ${{ vars.MAVEN_RELEASE_REPOSITORY_ID }}
+      MAVEN_REPOSITORY_USERNAME: ${{ secrets.maven_username }}
+      MAVEN_REPOSITORY_PASSWORD_OR_TOKEN: ${{ secrets.maven_password_or_token }}
+      APICURIO_REGISTRY_URL: ${{ vars.APICURIO_REGISTRY_URL }}
+      APICURIO_MAVEN_PLUGIN_VERSION: ${{ vars.APICURIO_MAVEN_PLUGIN_VERSION || '3.2.2' }}
+      APICURIO_USERNAME: ${{ secrets.apicurio_username }}
+      APICURIO_PASSWORD_OR_TOKEN: ${{ secrets.apicurio_password_or_token }}
+      ARTIFACTORY_GENERIC_RELEASE_REPOSITORY: ${{ vars.ARTIFACTORY_GENERIC_RELEASE_REPOSITORY }}
+      INPUT_SERVICE_REPOSITORY: ${{ inputs.service_repository }}
+      INPUT_ARTIFACT: ${{ inputs.artifact }}
+      INPUT_VERSION: ${{ inputs.version }}
+      INPUT_DEVELOPMENT_VERSION: ${{ inputs.development_version }}
+      INPUT_DEFAULT_BRANCH: ${{ inputs.default_branch }}
+      INPUT_ARCHITECTURE_REPOSITORY: ${{ inputs.architecture_repository }}
+      INPUT_ARCHITECTURE_MANIFEST_PATH: ${{ inputs.architecture_manifest_path }}
+    steps:
+      - name: Check out trusted default branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: source
+          ref: ${{ inputs.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out trusted workflow implementation
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: arcadia-editions/api-product-workflows
+          ref: ${{ inputs.workflow_ref }}
+          token: ${{ secrets.checkout_token || github.token }}
+          path: pipeline
+          persist-credentials: false
+
+      - name: Check out architecture manifest
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ inputs.architecture_repository }}
+          ref: ${{ inputs.architecture_ref }}
+          token: ${{ secrets.architecture_token || secrets.checkout_token || github.token }}
+          path: architecture
+          persist-credentials: false
+
+      - name: Set up pinned JDK
+        uses: actions/setup-java@7a445ee88d4e23b52c33c877a462a2f6773c8420
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up pinned tools
+        shell: bash
+        run: |
+          chmod +x pipeline/scripts/artifacts/*.sh
+          pipeline/scripts/artifacts/setup-jbang.sh 0.138.0
+          cd pipeline/spectral
+          npm ci
+          npm run bundle
+
+      - name: Create selected-family execution plan
+        id: plan
+        shell: bash
+        run: |
+          plan="$(jq -nc --arg type "$INPUT_ARTIFACT" '[{type:$type,changedFiles:[]}]')"
+          echo "plan=$plan" >> "$GITHUB_OUTPUT"
+
+      - name: Verify release inputs and remote state
+        id: preflight
+        shell: bash
+        run: |
+          pipeline/scripts/artifacts/verify-release-inputs.sh \
+            source "$INPUT_ARTIFACT" "$INPUT_VERSION" \
+            "$INPUT_DEVELOPMENT_VERSION" "$INPUT_DEFAULT_BRANCH"
+
+      - name: Validate and package before any write
+        env:
+          PLAN_JSON: ${{ steps.plan.outputs.plan }}
+        shell: bash
+        run: |
+          pipeline/scripts/artifacts/execute-plan.sh \
+            ci "$PLAN_JSON" source pipeline \
+            "architecture/$INPUT_ARCHITECTURE_MANIFEST_PATH" \
+            "$INPUT_SERVICE_REPOSITORY" pipeline/config/maven-settings.xml \
+            source/target/preflight
+
+      - name: Create release and next-development commits
+        id: prepare
+        env:
+          RELEASE_BRANCH: ${{ steps.preflight.outputs.branch }}
+        shell: bash
+        run: |
+          git -C source config user.name 'arcadia-editions-release[bot]'
+          git -C source config user.email 'arcadia-editions-release[bot]@users.noreply.github.com'
+          git -C source switch -c "$RELEASE_BRANCH"
+          pipeline/scripts/artifacts/set-version.sh source "$INPUT_ARTIFACT" "$INPUT_VERSION"
+          git -C source add --all
+          git -C source commit -m "Release $INPUT_ARTIFACT $INPUT_VERSION"
+          release_commit="$(git -C source rev-parse HEAD)"
+          pipeline/scripts/artifacts/set-version.sh source "$INPUT_ARTIFACT" "$INPUT_DEVELOPMENT_VERSION"
+          git -C source add --all
+          git -C source commit -m "Prepare $INPUT_ARTIFACT $INPUT_DEVELOPMENT_VERSION"
+          gh auth setup-git
+          git -C source push --set-upstream origin "$RELEASE_BRANCH"
+          echo "release_commit=$release_commit" >> "$GITHUB_OUTPUT"
+
+      - name: Open and merge release pull request through branch protection
+        id: release_pr
+        env:
+          RELEASE_BRANCH: ${{ steps.preflight.outputs.branch }}
+        shell: bash
+        run: |
+          pr_url="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$RELEASE_BRANCH" --state open --json url --jq '.[0].url // empty')"
+          if [[ -z "$pr_url" ]]; then
+            pr_url="$(gh pr create --repo "$GITHUB_REPOSITORY" \
+              --base "$INPUT_DEFAULT_BRANCH" \
+              --head "$RELEASE_BRANCH" \
+              --title "Release $INPUT_ARTIFACT $INPUT_VERSION" \
+              --body 'Two-commit artifact release: immutable release commit followed by the next development version.')"
+          fi
+          gh pr merge "$pr_url" --repo "$GITHUB_REPOSITORY" --merge --auto
+          for attempt in $(seq 1 240); do
+            state="$(gh pr view "$pr_url" --repo "$GITHUB_REPOSITORY" --json state --jq .state)"
+            [[ "$state" != 'MERGED' ]] || break
+            [[ "$state" == 'OPEN' ]] || { echo "release PR entered state $state" >&2; exit 1; }
+            sleep 30
+          done
+          [[ "$(gh pr view "$pr_url" --repo "$GITHUB_REPOSITORY" --json state --jq .state)" == 'MERGED' ]] || { echo 'release PR did not merge before timeout' >&2; exit 1; }
+          echo "url=$pr_url" >> "$GITHUB_OUTPUT"
+
+      - name: Push prefixed tag at the preserved release commit
+        env:
+          RELEASE_COMMIT: ${{ steps.prepare.outputs.release_commit }}
+          RELEASE_TAG: ${{ steps.preflight.outputs.tag }}
+        shell: bash
+        run: |
+          git -C source fetch origin "$INPUT_DEFAULT_BRANCH"
+          git -C source merge-base --is-ancestor "$RELEASE_COMMIT" "origin/$INPUT_DEFAULT_BRANCH"
+          git -C source tag -a "$RELEASE_TAG" "$RELEASE_COMMIT" \
+            -m "$INPUT_ARTIFACT v$INPUT_VERSION"
+          git -C source push origin "$RELEASE_TAG"
+          git -C source checkout --detach "$RELEASE_COMMIT"
+
+      - name: Publish immutable release outputs
+        id: publish
+        env:
+          PLAN_JSON: ${{ steps.plan.outputs.plan }}
+        shell: bash
+        run: |
+          pipeline/scripts/artifacts/execute-plan.sh \
+            release "$PLAN_JSON" source pipeline \
+            "architecture/$INPUT_ARCHITECTURE_MANIFEST_PATH" \
+            "$INPUT_SERVICE_REPOSITORY" pipeline/config/maven-settings.xml \
+            source/target/release
+
+      - name: Build scoped release notes
+        id: notes
+        env:
+          PACKAGES_JSON: ${{ steps.publish.outputs.packages }}
+        shell: bash
+        run: |
+          pipeline/scripts/artifacts/build-release-notes.sh \
+            source "$INPUT_ARTIFACT" "$INPUT_VERSION" \
+            "$PACKAGES_JSON" source/target/release-notes.md
+
+      - name: Create artifact-scoped GitHub Release
+        id: github_release
+        env:
+          PACKAGES_JSON: ${{ steps.publish.outputs.packages }}
+          RELEASE_TAG: ${{ steps.preflight.outputs.tag }}
+          NOTES_FILE: ${{ steps.notes.outputs.notes_file }}
+        shell: bash
+        run: |
+          mapfile -t assets < <(jq -r '.[] | .jar, .checksumFile' <<< "$PACKAGES_JSON")
+          flags=(--verify-tag --latest=false)
+          if [[ "$INPUT_ARTIFACT" == 'api-product' && "$INPUT_VERSION" != *-* ]]; then
+            flags=(--verify-tag --latest=true)
+          elif [[ "$INPUT_VERSION" == *-* ]]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$INPUT_ARTIFACT v$INPUT_VERSION" \
+            --notes-file "$NOTES_FILE" \
+            "${flags[@]}" "${assets[@]}"
+          echo "url=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json url --jq .url)" >> "$GITHUB_OUTPUT"
+
+      - name: Synchronize architecture manifest or stage dry-run patch
+        id: architecture
+        shell: bash
+        env:
+          ARCHITECTURE_TOKEN: ${{ secrets.architecture_token }}
+          PACKAGES_JSON: ${{ steps.publish.outputs.packages }}
+          RELEASE_TAG: ${{ steps.preflight.outputs.tag }}
+          RELEASE_URL: ${{ steps.github_release.outputs.url }}
+        run: |
+          pipeline/scripts/artifacts/update-architecture-manifest.sh \
+            architecture "$INPUT_SERVICE_REPOSITORY" "$INPUT_ARTIFACT" "$INPUT_VERSION" \
+            "$INPUT_ARCHITECTURE_MANIFEST_PATH"
+          if [[ -n "$MAVEN_REPOSITORY_URL" && -n "$ARCHITECTURE_TOKEN" ]]; then
+            pipeline/scripts/artifacts/open-architecture-pr.sh \
+              architecture "$INPUT_ARCHITECTURE_REPOSITORY" \
+              "$INPUT_SERVICE_REPOSITORY" "$INPUT_ARTIFACT" "$INPUT_VERSION" \
+              "$RELEASE_TAG" "$RELEASE_URL" \
+              "$PACKAGES_JSON" "$INPUT_ARCHITECTURE_MANIFEST_PATH"
+          else
+            mkdir -p source/target/release/architecture
+            git -C architecture diff -- "$INPUT_ARCHITECTURE_MANIFEST_PATH" > source/target/release/architecture/manifest.patch
+            echo 'Remote Maven or architecture credential is absent; uploaded the proposed manifest patch only.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Add architecture pull request to release notes
+        if: steps.architecture.outputs.pr_url != ''
+        env:
+          PACKAGES_JSON: ${{ steps.publish.outputs.packages }}
+          ARCHITECTURE_PR_URL: ${{ steps.architecture.outputs.pr_url }}
+          RELEASE_TAG: ${{ steps.preflight.outputs.tag }}
+        shell: bash
+        run: |
+          pipeline/scripts/artifacts/build-release-notes.sh \
+            source "$INPUT_ARTIFACT" "$INPUT_VERSION" \
+            "$PACKAGES_JSON" source/target/release-notes.final.md \
+            "$ARCHITECTURE_PR_URL"
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --notes-file source/target/release-notes.final.md
+
+      - name: Dispatch next selected-family snapshot
+        if: success()
+        shell: bash
+        run: |
+          gh workflow run artifacts.yml --repo "$GITHUB_REPOSITORY" --ref "$INPUT_DEFAULT_BRANCH" \
+            -f publish_snapshots=true -f artifact="$INPUT_ARTIFACT"
+
+      - name: Upload release repository trees and dry-run material
+        if: always()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: artifact-release-${{ inputs.artifact }}-${{ inputs.version }}
+          path: source/target/release
+          if-no-files-found: warn
+          retention-days: 30

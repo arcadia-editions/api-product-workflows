@@ -2,7 +2,7 @@
 
 > Beta lifecycle: End-to-end pipeline working against real infrastructure, still evolving before production hardening.
 
-# asyncapi-ops-pipelines
+# api-product-workflows
 
 Shared CI/CD assets for Arcadia Editions AsyncAPI repositories.
 
@@ -21,6 +21,7 @@ This repository provides the reusable workflow and scripts that turn AsyncAPI co
 - `scripts/provision-kafka.sh`: generates Terraform and overlays shared files
 - `scripts/assert-terraform-env.sh`: validates required environment variables
 - `terraform/common/`: shared Terraform provider, defaults, outputs, and HCP Terraform config template
+- `docs/spectral-workflows.md`: Spectral CI, release branching, tagging, and bundle distribution
 
 ## How service repos use it
 
@@ -29,7 +30,7 @@ Each service repo keeps a thin caller workflow:
 ```yaml
 jobs:
   provision:
-    uses: arcadia-editions/asyncapi-ops-pipelines/.github/workflows/provision-kafka.yml@main
+    uses: arcadia-editions/api-product-workflows/.github/workflows/provision-kafka.yml@main
 ```
 
 ## Environment model
@@ -71,6 +72,7 @@ export TF_VAR_kafka_rest_endpoint="..."
 export TF_VAR_kafka_api_key="..."
 export TF_VAR_kafka_api_secret="..."
 export TF_VAR_schema_registry_id="..."
+export TF_VAR_schema_registry_crn="..."
 export TF_VAR_schema_registry_rest_endpoint="..."
 export TF_VAR_schema_registry_api_key="..."
 export TF_VAR_schema_registry_api_secret="..."
@@ -87,9 +89,9 @@ For GitHub Actions, the reusable workflow validates all of the variables above p
 
 Useful options:
 
-- `--github-secrets`: store generated values with GitHub CLI.
-- `--repo owner/repo`: store secrets in one repository.
-- `--org org-slug`: store organization secrets. Defaults to `arcadia-editions`.
+- `--github-secrets`: store generated secrets and variables with GitHub CLI.
+- `--repo owner/repo`: store configuration in one repository.
+- `--org org-slug`: store organization configuration. Defaults to `arcadia-editions`.
 - `--rotate-keys`: create fresh API keys instead of reusing `.env.confluent-ci`.
 - `--print`: print exports to stdout.
 - `--dry-run`: show intended actions without creating resources or writing secrets.

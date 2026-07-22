@@ -1,0 +1,147 @@
+name: Artifact CI
+
+on:
+  workflow_call:
+    inputs:
+      workflow_ref:
+        description: Immutable api-product-workflows commit SHA or release tag.
+        required: true
+        type: string
+      service_repository:
+        description: API-product repository name.
+        required: true
+        type: string
+      architecture_repository:
+        required: false
+        default: arcadia-editions/arcadia-editions-docs
+        type: string
+      architecture_ref:
+        required: false
+        default: main
+        type: string
+      architecture_manifest_path:
+        required: false
+        default: zenwave-architecture.yml
+        type: string
+      base_sha:
+        required: false
+        default: ""
+        type: string
+      head_sha:
+        required: false
+        default: ""
+        type: string
+      full_validation:
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      checkout_token:
+        required: false
+    outputs:
+      plan:
+        description: Complete trusted validation plan.
+        value: ${{ jobs.ci.outputs.plan }}
+      publication_plan:
+        description: Trusted plan containing source-changing families only.
+        value: ${{ jobs.ci.outputs.publication_plan }}
+      packages:
+        description: JSON package inventory.
+        value: ${{ jobs.ci.outputs.packages }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      INPUT_SERVICE_REPOSITORY: ${{ inputs.service_repository }}
+      INPUT_ARCHITECTURE_MANIFEST_PATH: ${{ inputs.architecture_manifest_path }}
+      INPUT_FULL_VALIDATION: ${{ inputs.full_validation }}
+    outputs:
+      plan: ${{ steps.detect.outputs.plan }}
+      publication_plan: ${{ steps.detect.outputs.publication_plan }}
+      packages: ${{ steps.execute.outputs.packages }}
+    steps:
+      - name: Check out caller commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: source
+          ref: ${{ inputs.head_sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out trusted workflow implementation
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: arcadia-editions/api-product-workflows
+          ref: ${{ inputs.workflow_ref }}
+          token: ${{ secrets.checkout_token || github.token }}
+          path: pipeline
+          persist-credentials: false
+
+      - name: Check out architecture manifest
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ inputs.architecture_repository }}
+          ref: ${{ inputs.architecture_ref }}
+          token: ${{ secrets.checkout_token || github.token }}
+          path: architecture
+          persist-credentials: false
+
+      - name: Set up pinned JDK
+        uses: actions/setup-java@7a445ee88d4e23b52c33c877a462a2f6773c8420
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up pinned JBang
+        shell: bash
+        run: |
+          chmod +x pipeline/scripts/artifacts/setup-jbang.sh
+          pipeline/scripts/artifacts/setup-jbang.sh 0.138.0
+
+      - name: Build pinned Spectral bundle
+        working-directory: pipeline/spectral
+        shell: bash
+        run: |
+          npm ci
+          npm run bundle
+
+      - name: Detect affected artifact families
+        id: detect
+        shell: bash
+        env:
+          BASE_SHA: ${{ inputs.base_sha || github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ inputs.head_sha || github.sha }}
+        run: |
+          chmod +x pipeline/scripts/artifacts/*.sh
+          pipeline/scripts/artifacts/detect-changes.sh source "$BASE_SHA" "$HEAD_SHA" "$INPUT_FULL_VALIDATION"
+
+      - name: Validate and package trusted plan
+        id: execute
+        env:
+          PLAN_JSON: ${{ steps.detect.outputs.plan }}
+        shell: bash
+        run: |
+          pipeline/scripts/artifacts/execute-plan.sh \
+            ci "$PLAN_JSON" source pipeline \
+            "architecture/$INPUT_ARCHITECTURE_MANIFEST_PATH" \
+            "$INPUT_SERVICE_REPOSITORY" \
+            pipeline/config/maven-settings.xml \
+            source/target/artifacts
+
+      - name: Upload CI packages and proposed repository trees
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: artifact-ci-${{ github.sha }}
+          path: source/target/artifacts
+          if-no-files-found: error
+          retention-days: 7

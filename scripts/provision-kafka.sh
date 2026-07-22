@@ -53,6 +53,7 @@ service_repo_name="$(basename "$resolved_service_repo_path")"
 generator_args=(
   "apiFile=$resolved_asyncapi_file"
   "templates=TerraformConfluent"
+  "serviceAccountMode=managed"
   "server=$SERVER"
   "targetFolder=$resolved_target_folder"
 )

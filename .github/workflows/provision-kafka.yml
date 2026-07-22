@@ -63,6 +63,7 @@ jobs:
       TF_VAR_kafka_api_key: ${{ secrets.CONFLUENT_KAFKA_API_KEY }}
       TF_VAR_kafka_api_secret: ${{ secrets.CONFLUENT_KAFKA_API_SECRET }}
       TF_VAR_schema_registry_id: ${{ vars.CONFLUENT_SCHEMA_REGISTRY_ID }}
+      TF_VAR_schema_registry_crn: ${{ vars.CONFLUENT_SCHEMA_REGISTRY_CRN }}
       TF_VAR_schema_registry_rest_endpoint: ${{ vars.CONFLUENT_SCHEMA_REGISTRY_REST_ENDPOINT }}
       TF_VAR_schema_registry_api_key: ${{ secrets.CONFLUENT_SCHEMA_REGISTRY_API_KEY }}
       TF_VAR_schema_registry_api_secret: ${{ secrets.CONFLUENT_SCHEMA_REGISTRY_API_SECRET }}
@@ -78,7 +79,7 @@ jobs:
       - name: Checkout shared pipeline repository
         uses: actions/checkout@v4
         with:
-          repository: arcadia-editions/asyncapi-ops-pipelines
+          repository: arcadia-editions/api-product-workflows
           ref: ${{ inputs.pipeline_ref }}
           path: pipeline-repo
 
@@ -116,6 +117,7 @@ jobs:
             TF_VAR_kafka_api_key \
             TF_VAR_kafka_api_secret \
             TF_VAR_schema_registry_id \
+            TF_VAR_schema_registry_crn \
             TF_VAR_schema_registry_rest_endpoint \
             TF_VAR_schema_registry_api_key \
             TF_VAR_schema_registry_api_secret \
