@@ -33,9 +33,9 @@ Creates or reuses Confluent Cloud resources for low-volume CI testing and writes
 Terraform-compatible exports to .env.confluent-ci.
 
 Options:
-  --github-secrets   Store generated values as GitHub secrets with gh.
-  --repo owner/repo  Store secrets in one repository instead of the default organization.
-  --org org-slug     Store organization secrets with visibility=all. Defaults to arcadia-editions.
+  --github-secrets   Store generated secrets and variables with gh.
+  --repo owner/repo  Store configuration in one repository instead of the default organization.
+  --org org-slug     Store organization configuration with visibility=all. Defaults to arcadia-editions.
   --rotate-keys      Create new API keys even when .env.confluent-ci can be reused.
   --print            Print generated exports to stdout. Secrets are not printed by default.
   --dry-run          Print intended actions without creating resources or writing secrets.
@@ -334,6 +334,34 @@ EOF
   printf '%s\n' "$json"
 }
 
+resolve_schema_registry_crn() {
+  local schema_registry_json="$1"
+  local env_id="$2"
+  local schema_registry_id="$3"
+  local schema_registry_crn
+  local organization_json
+  local organization_id
+
+  schema_registry_crn="$(json_get "$schema_registry_json" "resource_name")"
+  [[ -n "$schema_registry_crn" ]] || schema_registry_crn="$(json_get "$schema_registry_json" "resourceName")"
+  if [[ -n "$schema_registry_crn" ]]; then
+    printf '%s\n' "$schema_registry_crn"
+    return
+  fi
+
+  if [[ "$DRY_RUN" == true ]]; then
+    organization_id="organization-dryrun"
+  else
+    organization_json="$(run_json confluent organization describe -o json)"
+    organization_id="$(require_json_field "$organization_json" "id" "organization ID")"
+  fi
+
+  printf 'crn://confluent.cloud/organization=%s/environment=%s/schema-registry=%s\n' \
+    "$organization_id" \
+    "$env_id" \
+    "$schema_registry_id"
+}
+
 find_schema_registry_endpoint() {
   local env_id="$1"
 
@@ -520,6 +548,23 @@ set_github_secret() {
   printf '%s' "$value" | gh secret set "$name" "${repo_args[@]}" "${org_args[@]}" >/dev/null
 }
 
+set_github_variable() {
+  local name="$1"
+  local value="$2"
+  local repo_args=()
+  local org_args=()
+
+  [[ -n "$GITHUB_REPO" ]] && repo_args=(--repo "$GITHUB_REPO")
+  [[ -n "$GITHUB_ORG" ]] && org_args=(--org "$GITHUB_ORG" --visibility all)
+
+  if [[ "$DRY_RUN" == true ]]; then
+    log "DRY RUN: would set GitHub variable '$name'"
+    return
+  fi
+
+  gh variable set "$name" --body "$value" "${repo_args[@]}" "${org_args[@]}" >/dev/null
+}
+
 main() {
   parse_args "$@"
 
@@ -531,12 +576,12 @@ main() {
     if [[ "$DRY_RUN" == false ]]; then
       gh auth status >/dev/null 2>&1 || die "GitHub CLI is not authenticated. Run: gh auth login"
     else
-      log "DRY RUN: would require 'gh auth status' before writing GitHub secrets"
+      log "DRY RUN: would require 'gh auth status' before writing GitHub configuration"
     fi
   elif command -v gh >/dev/null 2>&1; then
-    log "GitHub CLI detected. Re-run with --github-secrets to store values as GitHub secrets."
+    log "GitHub CLI detected. Re-run with --github-secrets to store GitHub secrets and variables."
   else
-    log "GitHub CLI not found. Continuing without GitHub secret storage."
+    log "GitHub CLI not found. Continuing without GitHub configuration storage."
   fi
 
   if [[ "$DRY_RUN" == false ]]; then
@@ -564,6 +609,7 @@ main() {
   schema_registry_json="$(ensure_schema_registry "$env_id")"
   local schema_registry_id
   local schema_registry_rest_endpoint
+  local schema_registry_crn
   schema_registry_id="$(json_get "$schema_registry_json" "id")"
   [[ -n "$schema_registry_id" ]] || schema_registry_id="$(json_get "$schema_registry_json" "cluster")"
   [[ -n "$schema_registry_id" ]] || die "Could not parse Schema Registry ID from Confluent CLI JSON output"
@@ -574,6 +620,7 @@ main() {
   [[ -n "$schema_registry_rest_endpoint" ]] || schema_registry_rest_endpoint="$(json_get "$schema_registry_json" "public_endpoint_url")"
   [[ -n "$schema_registry_rest_endpoint" ]] || schema_registry_rest_endpoint="$(find_schema_registry_endpoint "$env_id")"
   [[ -n "$schema_registry_rest_endpoint" ]] || die "Could not parse Schema Registry REST endpoint from Confluent CLI JSON output"
+  schema_registry_crn="$(resolve_schema_registry_crn "$schema_registry_json" "$env_id" "$schema_registry_id")"
 
   # Create or reuse the service account that owns CI API keys.
   local service_account_id
@@ -606,6 +653,7 @@ main() {
     write_export "kafka_api_secret" "$kafka_api_secret"
     printf '\n'
     write_export "schema_registry_id" "$schema_registry_id"
+    write_export "schema_registry_crn" "$schema_registry_crn"
     write_export "schema_registry_rest_endpoint" "$schema_registry_rest_endpoint"
     write_export "schema_registry_api_key" "$schema_registry_api_key"
     write_export "schema_registry_api_secret" "$schema_registry_api_secret"
@@ -636,7 +684,8 @@ main() {
     set_github_secret "SCHEMA_REGISTRY_REST_ENDPOINT" "$schema_registry_rest_endpoint"
     set_github_secret "SCHEMA_REGISTRY_API_KEY" "$schema_registry_api_key"
     set_github_secret "SCHEMA_REGISTRY_API_SECRET" "$schema_registry_api_secret"
-    [[ "$DRY_RUN" == true ]] || log "Stored GitHub repository secrets"
+    set_github_variable "CONFLUENT_SCHEMA_REGISTRY_CRN" "$schema_registry_crn"
+    [[ "$DRY_RUN" == true ]] || log "Stored GitHub configuration"
   fi
 
   cat >&2 <<EOF

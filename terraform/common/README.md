@@ -38,6 +38,7 @@ Service-specific overlays may override shared defaults through `terraform/servic
   - `CONFLUENT_KAFKA_CLUSTER_ID`
   - `CONFLUENT_KAFKA_REST_ENDPOINT`
   - `CONFLUENT_SCHEMA_REGISTRY_ID`
+  - `CONFLUENT_SCHEMA_REGISTRY_CRN`
   - `CONFLUENT_SCHEMA_REGISTRY_REST_ENDPOINT`
 
 ## Workspace naming

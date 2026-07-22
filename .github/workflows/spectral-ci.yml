@@ -1,0 +1,87 @@
+name: Spectral bundle CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - spectral/spectral-rules.yml
+      - spectral/rules/**
+      - spectral/scripts/**
+      - spectral/package.json
+      - spectral/package-lock.json
+      - spectral/.gitignore
+      - .github/workflows/spectral-ci.yml
+  push:
+    branches: [main]
+    paths:
+      - spectral/spectral-rules.yml
+      - spectral/rules/**
+      - spectral/scripts/**
+      - spectral/package.json
+      - spectral/package-lock.json
+      - spectral/.gitignore
+      - .github/workflows/spectral-ci.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spectral-ci-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bundle:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Check out exact source commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Verify committed build input
+        shell: bash
+        run: |
+          test -s spectral/package-lock.json || {
+            echo "::error file=spectral/package-lock.json::Commit the npm lockfile required by setup-node caching and npm ci."
+            exit 1
+          }
+
+      - name: Set up pinned Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22.17.0"
+          cache: npm
+          cache-dependency-path: spectral/package-lock.json
+
+      - name: Build and verify bundle
+        working-directory: spectral
+        shell: bash
+        run: |
+          npm ci
+          npm run bundle
+          npm run verify:bundle
+          cd dist
+          sha256sum spectral.js > spectral.js.sha256
+
+      - name: Run fixture lint scripts when supplied
+        working-directory: spectral
+        shell: bash
+        run: |
+          if npm pkg get scripts.lint:fixtures | grep -vq '^{}$'; then
+            npm run lint:fixtures
+          else
+            echo 'Fixture suite is not present in this increment.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload generated bundle
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: spectral-bundle-${{ github.sha }}
+          path: |
+            spectral/dist/spectral.js
+            spectral/dist/spectral.js.sha256
+          if-no-files-found: error
+          retention-days: 7

@@ -1,0 +1,16 @@
+{
+  "name": "arcadia-editions-spectral-rules",
+  "version": "0.1.0-SNAPSHOT",
+  "private": true,
+  "scripts": {
+    "bundle": "node scripts/bundle-spectral.js",
+    "verify:bundle": "node scripts/verify-bundle.js",
+    "serve:dist": "node scripts/serve-dist.js",
+    "lint:openapi": "spectral lint -r spectral-rules.yml tests-apis/openapi.yml"
+  },
+  "devDependencies": {
+    "@stoplight/spectral-cli": "^6.15.0",
+    "@stoplight/spectral-ruleset-migrator": "^1.11.3",
+    "esbuild": "^0.28.0"
+  }
+}
