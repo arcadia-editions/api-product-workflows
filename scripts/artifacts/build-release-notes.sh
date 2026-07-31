@@ -30,7 +30,7 @@ else
   [[ -z "$previous_tag" ]] || range="$previous_tag..HEAD"
   {
     printf '# %s v%s\n\n' "$artifact" "$version"
-    printf 'Changes affecting the %s artifact family:\n\n' "$artifact"
+    printf 'Changes affecting the %s release family:\n\n' "$artifact"
     mapfile -t paths < <(arcadia_source_files "$root" "$artifact")
     git -C "$root" log "$range" --pretty='- %s (%h)' -- "${paths[@]}" || true
   } > "$output"

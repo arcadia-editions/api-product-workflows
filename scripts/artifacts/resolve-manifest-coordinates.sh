@@ -7,7 +7,7 @@ source "$SCRIPT_DIR/lib.sh"
 
 manifest="${1:-}"
 service_repository="${2:-}"
-manifest_type="${3:-}"
+package_unit="${3:-}"
 deployment_version="${4:-}"
 
 [[ -s "$manifest" ]] || arcadia_die "manifest does not exist or is empty: $manifest"
@@ -16,5 +16,4 @@ arcadia_assert_semver "$deployment_version"
 arcadia_require_command jbang
 
 jbang --quiet "$SCRIPT_DIR/ManifestCoordinates.kt" \
-  "$manifest" "$service_repository" "$manifest_type" "$deployment_version"
-
+  "$manifest" "$service_repository" "$package_unit" "$deployment_version"

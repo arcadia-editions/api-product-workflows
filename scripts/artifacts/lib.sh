@@ -21,7 +21,7 @@ arcadia_require_command() {
 arcadia_assert_artifact() {
   case "${1:-}" in
     zdl|openapi|asyncapi|api-product) ;;
-    *) arcadia_die "unsupported artifact family: ${1:-<empty>}" ;;
+    *) arcadia_die "unsupported release family: ${1:-<empty>}" ;;
   esac
 }
 
@@ -79,9 +79,10 @@ arcadia_read_version() {
   esac
 }
 
-arcadia_manifest_types() {
+arcadia_package_units() {
   case "$1" in
     asyncapi) printf '%s\n' asyncapi asyncapi-client ;;
+    api-product) printf '%s\n' service ;;
     *) printf '%s\n' "$1" ;;
   esac
 }
@@ -107,9 +108,9 @@ arcadia_source_files() {
   esac | awk 'NF && !seen[$0]++'
 }
 
-arcadia_manifest_source_files() {
-  local root="$1" manifest_type="$2"
-  case "$manifest_type" in
+arcadia_package_unit_source_files() {
+  local root="$1" package_unit="$2"
+  case "$package_unit" in
     zdl) printf '%s\n' domain-model.zdl ;;
     openapi) printf '%s\n' openapi.yml ;;
     asyncapi)
@@ -117,8 +118,8 @@ arcadia_manifest_source_files() {
       git -C "$root" ls-files -- '*.avsc' '**/*.avsc'
       ;;
     asyncapi-client) printf '%s\n' asyncapi-client.yml ;;
-    api-product) arcadia_source_files "$root" api-product ;;
-    *) arcadia_die "unsupported manifest artifact type: $manifest_type" ;;
+    service) arcadia_source_files "$root" api-product ;;
+    *) arcadia_die "unsupported package unit: $package_unit" ;;
   esac | awk 'NF && !seen[$0]++'
 }
 
@@ -128,4 +129,3 @@ arcadia_write_output() {
     printf '%s=%s\n' "$name" "$value" >> "$GITHUB_OUTPUT"
   fi
 }
-

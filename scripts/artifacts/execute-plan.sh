@@ -60,11 +60,11 @@ while IFS= read -r record; do
   group_path="$(jq -r .coordinates.groupPath <<< "$record")"
   artifact_id="$(jq -r .coordinates.artifactId <<< "$record")"
   version="$(jq -r .coordinates.deploymentVersion <<< "$record")"
-  artifact_path="$(jq -r .coordinates.artifactPath <<< "$record")"
+  content_path="$(jq -r .coordinates.contentPath <<< "$record")"
   deployed_dir="$file_repository/$group_path/$artifact_id/$version"
   deployed_jar="$(find "$deployed_dir" -maxdepth 1 -type f -name '*.jar' -print -quit)"
   [[ -n "$deployed_jar" ]] || arcadia_die "deployed JAR not found under manifest-core coordinates: $deployed_dir"
-  unzip -p "$deployed_jar" "$artifact_path" >/dev/null || arcadia_die "manifest-declared path cannot be read from deployed JAR: $artifact_path"
+  unzip -p "$deployed_jar" "$content_path" >/dev/null || arcadia_die "required content path cannot be read from deployed JAR: $content_path"
 done < <(jq -c '.[]' <<< "$packages")
 
 if [[ "$mode" == "snapshot" || "$mode" == "release" ]]; then

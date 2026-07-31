@@ -61,7 +61,8 @@ arcadia_assert_semver "$version"
 case "$artifact" in
   zdl)
     [[ -s "$root/domain-model.zdl" ]] || arcadia_die "domain-model.zdl is missing or empty"
-    arcadia_die "ZDL semantic validation requires a pinned standalone validator; none is configured"
+    arcadia_require_command jbang
+    jbang --quiet "$SCRIPT_DIR/ValidateZdl.java" "$root/domain-model.zdl"
     ;;
   openapi)
     parse_yaml "$root/openapi.yml"

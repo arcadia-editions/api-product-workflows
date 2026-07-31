@@ -1,3 +1,4 @@
+//KOTLIN 2.0.21
 //DEPS com.fasterxml.jackson.core:jackson-databind:2.19.2
 //DEPS com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.19.2
 
@@ -15,4 +16,3 @@ fun main(args: Array<String>) {
     val document = yaml.readTree(path.toFile())
     println(json.writeValueAsString(document))
 }
-

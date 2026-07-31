@@ -17,11 +17,12 @@ Normative terms such as **MUST**, **MUST NOT**, **SHOULD**, and **MAY** describe
 ## 2. Goals
 
 - Release ZDL, OpenAPI, AsyncAPI plus Avro, and the complete API-product repository on independent release trains.
-- Use prefixed Git tags so releases of different artifact families can coexist in one Git repository.
-- Validate only the artifact families affected by a change.
+- Use prefixed Git tags so releases of different release families can coexist in one Git repository.
+- Validate only the release families affected by a change.
 - Publish snapshots only from a trusted branch after CI succeeds.
 - Build Maven-compatible JARs with the JDK `jar` command, without introducing project POMs.
 - Install and deploy those JARs with `maven-install-plugin:install-file` and `maven-deploy-plugin:deploy-file`.
+- Publish those Maven JARs to each `*-api` repository's own GitHub Packages Maven registry, for both mutable snapshots and immutable releases.
 - Resolve Maven coordinates from `zenwave-architecture.yml` using `manifest-core` semantics.
 - Keep Artifactory generic repositories as a documented publication placeholder for versioned, browsable trees of repository-relative files until a server is available for integration testing.
 - Register OpenAPI and AsyncAPI artifacts in Apicurio Registry using the Maven plugin in CLI mode.
@@ -42,14 +43,15 @@ Normative terms such as **MUST**, **MUST NOT**, **SHOULD**, and **MAY** describe
 - Kafka and Terraform provisioning remains a separate deployment lifecycle. It may consume a released AsyncAPI artifact, but it is not part of an artifact release transaction.
 - This specification does not require a Maven project or committed POM in an API-product repository. Minimal POM metadata generated transiently by Maven install/deploy goals is allowed.
 - Publishing to Maven Central is outside the pilot scope.
-- Production deployment to an Artifactory server is outside the pilot acceptance gate until a test server exists; file-backed Maven repository deployment is required instead.
+- Production deployment to an Artifactory **generic** repository is outside the pilot acceptance gate until a test server exists; dry-run staging of the proposed generic file tree is used instead (§12.5). This does not extend to Maven publication: Maven JARs target each repository's real GitHub Packages registry from the start of the pilot (§12.4), not a placeholder.
 - Automatically merging architecture-manifest pull requests is outside the pilot scope.
 
 ## 4. Terminology
 
 - **API-product repository**: a repository such as `orders-checkout-api` containing domain and API artifacts. It is not a Spring Boot service implementation.
 - **Service or full-repository release**: the `api-product` release family containing the curated API-product repository. This is the only family eligible for GitHub's repository-wide latest marker.
-- **Artifact family**: one independently versioned and released product: `zdl`, `openapi`, `asyncapi`, or `api-product`.
+- **Release family**: one independently versioned and released product: `zdl`, `openapi`, `asyncapi`, or the aggregate `api-product` service package.
+- **Manifest artifact type**: an actual artifact entry owned by a service, such as `zdl`, `openapi`, `asyncapi`, or `asyncapi-client`; `api-product` is not a manifest artifact type.
 - **AsyncAPI bundle**: `asyncapi.yml`, optional `asyncapi-client.yml`, and every owned, tracked Avro schema matching `**/*.avsc`, regardless of its containing folder.
 - **Release version**: a semantic version without a leading `v`, for example `1.2.0` or `1.2.0-rc.1`.
 - **Development version**: the next version ending in `-SNAPSHOT`, for example `1.3.0-SNAPSHOT`.
@@ -71,9 +73,9 @@ The implementation MUST provide common reusable workflow engines for:
 
 Artifact type is controlled data supplied to those engines. Artifact-specific behavior is implemented by shared scripts or actions selected from a closed mapping. The workflows MUST NOT accept arbitrary commands, paths, tag prefixes, registry types, or publication destinations from a caller.
 
-CI and trusted-branch snapshot workflows infer **all** affected artifact families from the changed files and process them through one parameterized runner loop. They MUST NOT create separate copied workflows or statically expanded blocks per artifact family. A dynamic GitHub Actions matrix is not the primary execution model for the pilot; the shared runner performs the loop inside one job so common setup, validation gates, packaging, and publication ordering remain visible as one lifecycle run.
+CI and trusted-branch snapshot workflows infer **all** affected release families from the changed files and process them through one parameterized runner loop. They MUST NOT create separate copied workflows or statically expanded blocks per release family. A dynamic GitHub Actions matrix is not the primary execution model for the pilot; the shared runner performs the loop inside one job so common setup, validation gates, packaging, and publication ordering remain visible as one lifecycle run.
 
-Manual release is intentionally different: it releases exactly one artifact family per invocation. The release caller MUST require an `artifact` choice and MUST NOT infer or automatically add other release trains, even when other families have unreleased changes. This preserves independent versions, tags, GitHub Releases, and manifest updates without duplicating the release implementation.
+Manual release is intentionally different: it releases exactly one release family per invocation. The release caller MUST require an `artifact` choice and MUST NOT infer or automatically add other release trains, even when other families have unreleased changes. This preserves independent versions, tags, GitHub Releases, and manifest updates without duplicating the release implementation.
 
 ### 5.2 CI and release remain separate security boundaries
 
@@ -85,15 +87,16 @@ The pilot uses `main` as its pull-request target and snapshot branch. The artifa
 
 ### 5.4 The repository stores development versions
 
-After a release, the selected artifact family is advanced to its next `-SNAPSHOT` version in source control. The release tag points to the preceding release-version commit.
+After a release, the selected release family is advanced to its next `-SNAPSHOT` version in source control. The release tag points to the preceding release-version commit.
 
 ### 5.5 Manifest versions are authoritative for released architecture content
 
-The published ZenWave architecture schema supports `artifact.version`. It does not support an artifact `tag` property. The architecture update therefore stores only the released version. The tag is deterministic from the artifact family and version.
+The published ZenWave architecture schema requires `artifact.version` on every artifact entry (`$defs/artifact` requires `type`, `path`, and `version`). It does not support an artifact `tag` property. An artifact's version is therefore always this explicit, mandatory declaration — artifact-level version inheritance has been removed, so it never falls back to `service.version`, `subdomain.version`, or `domain.version`. The architecture update stores only this released version at the artifact itself. The tag is deterministic from the release family and version.
 
 ### 5.6 Maven coordinates come from the architecture manifest
 
-The workflows MUST use the same coordinate precedence and expression evaluation as `manifest-core`:
+For manifest artifacts, the workflows MUST use the same coordinate precedence
+and expression evaluation as `manifest-core`:
 
 ```text
 groupId    = service.groupId, otherwise config.groupIdExpression
@@ -109,7 +112,13 @@ artifactId = ${artifact.fileNameWithoutExtension}
 
 The workflow MUST NOT duplicate these expressions in shell code or derive coordinates independently. A pinned `manifest-core`-based resolver MUST load the manifest, select the service and artifact, and return the resolved group ID, artifact ID, manifest effective version, and artifact path.
 
-`manifest-core` resolves an artifact's effective consumer version in this order: artifact, service, subdomain, then domain. That inherited version is authoritative when consuming the released architecture. It is intentionally **not** the version used while producing a new release, because the central manifest still names the previous release until the synchronization PR is merged. Producer workflows use the selected artifact's canonical source version as the Maven deployment version and verify that the manifest PR will make the consumer-side effective version equal to it.
+The service aggregate is the one exception because it is not a manifest
+artifact. Its group ID is resolved from the service through `manifest-core`, its
+Maven artifact ID is `service.repository`, its effective version is
+`service.version`, and `.arcadia/api-product.yml` is its required descriptor
+path.
+
+`manifest-core` resolves an artifact's effective consumer version as `artifact.version`, full stop. Artifact-level version inheritance has been removed: an artifact never falls back to `service.version`, `subdomain.version`, or `domain.version`. (Service-level *documents* are unaffected by this and still inherit through `service.version` → `subdomain.version` → `domain.version`; that is a separate resolution path.) The artifact's own declared version is authoritative when consuming the released architecture. It is intentionally **not** the version used while producing a new release, because the central manifest still names the previous release until the synchronization PR is merged. Producer workflows use the selected artifact's canonical source version as the Maven deployment version and verify that the manifest PR will make the consumer-side effective version equal to it.
 
 ### 5.7 Event catalogs are fully regenerated in two channels
 
@@ -118,14 +127,14 @@ The ZenWave `EventCatalogPlugin` reads the complete architecture manifest and en
 - The development catalog follows trusted `main` content through the manifest's Git source.
 - The released catalog follows versions recorded in the manifest and loads artifact content from Maven before falling back to Git for non-versioned documentation. Apicurio publication is independently verified during release.
 
-## 6. Artifact catalog
+## 6. Release-family catalog
 
 | Family | Pilot source set | Canonical version source | Tag | Maven artifacts | Apicurio |
 | --- | --- | --- | --- | --- | --- |
 | `zdl` | `domain-model.zdl` | `.arcadia/versions/zdl.version` | `zdl/v{version}` | Manifest `zdl` artifact | No |
 | `openapi` | `openapi.yml` | `openapi.yml#/info/version` | `openapi/v{version}` | Manifest `openapi` artifact | `OPENAPI` |
 | `asyncapi` | `asyncapi.yml`, `asyncapi-client.yml`, `**/*.avsc` | `asyncapi.yml#/info/version` | `asyncapi/v{version}` | Manifest `asyncapi` and `asyncapi-client` artifacts | `ASYNCAPI` |
-| `api-product` | Complete curated repository source package plus `.arcadia/api-product.yml` | `.arcadia/api-product.yml#/version` | `api-product/v{version}` | Manifest `api-product` artifact | No |
+| `api-product` | Complete curated repository source package plus `.arcadia/api-product.yml` | `.arcadia/api-product.yml#/version` | `api-product/v{version}` | Service aggregate JAR | No |
 | `spectral` | `spectral/spectral-rules.yml`, `spectral/rules/**`, bundle scripts | `spectral/package.json#/version` | `spectral/v{version}` | None in the pilot | No |
 
 For the AsyncAPI family, `asyncapi-client.yml#/info/version` MUST equal `asyncapi.yml#/info/version`. The release workflow updates both. One release operation produces an `asyncapi` JAR containing `asyncapi.yml` and all owned files matching `**/*.avsc` at their repository-relative paths, plus a separate `asyncapi-client` JAR when that manifest artifact exists. This matches `manifest-core`, which resolves each manifest artifact from its own Maven coordinate.
@@ -157,6 +166,7 @@ scripts/artifacts/
   resolve-artifact.sh
   read-version.sh
   set-version.sh
+  ValidateZdl.java
   validate-artifact.sh
   resolve-manifest-coordinates.sh
   package-maven-jar.sh
@@ -210,7 +220,7 @@ It handles the repository-local triggers and delegates generation to the immutab
 
 ### 8.1 Path mapping
 
-The shared CI workflow MUST detect changes relative to the pull-request base SHA or push-before SHA and produce a JSON array of affected artifact families.
+The shared CI workflow MUST detect changes relative to the pull-request base SHA or push-before SHA and produce a JSON array of affected release families.
 
 | Changed path | Affected family |
 | --- | --- |
@@ -222,7 +232,7 @@ The shared CI workflow MUST detect changes relative to the pull-request base SHA
 | `**/*.avsc` | `asyncapi`, `api-product` |
 | `.arcadia/api-product.yml` | `api-product` |
 | `README.md`, `SUMMARY.md`, `CHANGELOG.md` | `api-product` |
-| `release-notes/**` | No artifact family; release-readiness validation only |
+| `release-notes/**` | No release family; release-readiness validation only |
 | API-product packaging metadata | `api-product` |
 
 Workflow-only changes in the pilot MUST run all validation routines but MUST NOT publish snapshots unless artifact content or a canonical artifact version changed.
@@ -267,7 +277,7 @@ for artifact in "${affected_artifacts[@]}"; do
 done
 ```
 
-GitHub Actions cannot dynamically repeat arbitrary YAML steps without expanding jobs. The implementation therefore keeps orchestration in a reviewed shared script or composite action and invokes the artifact-specific functions using the trusted descriptor. Logs and step summaries MUST still report results separately for each artifact family.
+GitHub Actions cannot dynamically repeat arbitrary YAML steps without expanding jobs. The implementation therefore keeps orchestration in a reviewed shared script or composite action and invokes the package-specific functions using the trusted descriptor. Logs and step summaries MUST still report results separately for each release family.
 
 ## 9. CI workflow
 
@@ -283,12 +293,12 @@ The pilot caller runs CI on:
 
 1. Check out the exact caller commit without persisted credentials.
 2. Check out the pinned `api-product-workflows` revision into a separate directory.
-3. Detect all affected artifact families and construct the stable execution plan.
+3. Detect all affected release families and construct the stable execution plan.
 4. Resolve trusted artifact descriptors from the shared mapping.
 5. Loop over every planned family and run validation, collecting all validation failures.
 6. Stop the lifecycle before packaging if any family failed validation.
 7. Loop over every planned family, resolve its Maven coordinates through the pinned manifest resolver, and create its JAR package with the JDK `jar` command.
-8. Loop over the produced JARs, deploy them to an isolated file-backed Maven repository with `maven-deploy-plugin:deploy-file`, and resolve their declared paths through `manifest-core` as an integration test.
+8. Loop over the produced JARs, deploy them to an isolated file-backed Maven repository with `maven-deploy-plugin:deploy-file`, and resolve their declared paths through `manifest-core` as an integration test. This file-backed deploy is a CI-only fixture; it is not the GitHub Packages publication used by snapshots and releases (§12.4).
 9. Loop over the planned families and stage their selected files in the proposed generic Artifactory tree layout without performing a remote upload.
 10. Upload CI packages and staged generic trees as short-lived GitHub Actions artifacts for inspection.
 11. Return the complete validated artifact-family list and package paths to the caller.
@@ -305,7 +315,10 @@ CI MUST NOT create commits, tags, GitHub Releases, remote registry versions, rem
 - MUST NOT run ZDL-to-OpenAPI or ZDL-to-AsyncAPI generation.
 - MUST NOT compare generated APIs with checked-in APIs.
 
-If no standalone pinned ZDL validator is available during pilot implementation, that is a blocking dependency for claiming ZDL semantic validation. The implementation MUST NOT silently substitute API generation as validation.
+The pilot uses `io.zenwave360.dsl:dsl-kotlin-jvm:1.8.0` through
+`scripts/artifacts/ValidateZdl.java`. The parser dependency is pinned in the JBang
+script, reports model diagnostics as validation errors, and does not run an API
+generator.
 
 #### OpenAPI
 
@@ -350,13 +363,13 @@ For each selected family:
 - Its canonical version MUST end in `-SNAPSHOT`.
 - Snapshots MUST NOT create Git tags or GitHub Releases.
 - Snapshots MUST NOT update `zenwave-architecture.yml`.
-- Maven snapshots are mutable by design. Until a remote Maven repository is available, the workflow deploys them into a fresh file-backed Maven repository and uploads that repository as a workflow artifact for verification.
+- Maven snapshots are mutable by design. The workflow deploys them to the repository's own GitHub Packages Maven registry at `https://maven.pkg.github.com/arcadia-editions/{service.repository}` (§12.4), where GitHub Packages accepts repeated `-SNAPSHOT` deploys under standard Maven snapshot semantics.
 - The workflow also stages the generic file tree. If generic snapshot publication is later enabled, it uploads that tree to the configured snapshot repository; otherwise the tree remains a workflow artifact only.
 - Every snapshot JAR MUST include the source commit SHA in `META-INF/arcadia/artifact-metadata.json`.
 - Snapshot publication MUST use an environment or credentials distinct from immutable release publication.
 - A snapshot rerun for the same commit and version MUST be idempotent.
 
-External publication cannot be made atomic across Maven, generic Artifactory, and Apicurio or across multiple artifact families. If publication fails after another family was published, the run fails with a per-family publication summary. A rerun MUST safely skip identical completed outputs and continue the incomplete work; it MUST NOT roll back valid snapshots from another family.
+External publication cannot be made atomic across Maven, generic Artifactory, and Apicurio or across multiple release families. If publication fails after another family was published, the run fails with a per-family publication summary. A rerun MUST safely skip identical completed outputs and continue the incomplete work; it MUST NOT roll back valid snapshots from another family.
 
 ### 10.3 Apicurio snapshot behavior
 
@@ -391,6 +404,8 @@ The caller supplies fixed service metadata such as `orders-checkout-api` and `or
 
 The workflow MUST NOT derive or default either version. Requiring the user to enter the release version and next development version preserves the intentional two-version release model used by the ZenWave workflows and makes the planned version transition visible before any write occurs.
 
+The operator-supplied `version` input is authoritative for the release. The workflow writes it into the selected artifact's canonical version location (§6, §11.3) and, after publication succeeds, into the architecture manifest (§16). Nothing else — not the manifest's current value, not the previously checked-in canonical version, not a prior tag — determines the released version.
+
 `artifact` is always explicit for a release. The workflow performs one release transaction for that selected type and its owned package set. For example, selecting `asyncapi` also packages the associated Avro schemas and `asyncapi-client` artifact, but it does not release `openapi` or `api-product`. If the branch contains unreleased changes for other families, the workflow reports them as informational warnings and leaves them for separate intentional release runs.
 
 The release workflow MUST NOT consume the multi-family CI plan as a request to release every detected family. It reruns validation for the selected family and may run read-only cross-artifact consistency checks, but it creates exactly one version transition, tag prefix, GitHub Release, and architecture-manifest update per invocation.
@@ -408,7 +423,8 @@ Before any write, the reusable workflow MUST:
 - Verify that no stale `release/{artifact}/{version}` branch exists.
 - Verify the current canonical version is a development version compatible with the requested release.
 - Run the complete artifact-specific CI validation.
-- Check that immutable Maven and Apicurio release coordinates do not contain different content when remote repositories are configured.
+- Check that the immutable Maven release coordinate does not already exist with different content; GitHub Packages independently enforces this by rejecting a redeploy of an existing release version (§12.4).
+- Check that the immutable Apicurio release coordinate does not contain different content when the registry is configured.
 - When generic Artifactory publication is enabled, check every target file and reject any different content already stored at the immutable release path.
 
 ### 11.3 Release commit model
@@ -416,11 +432,11 @@ Before any write, the reusable workflow MUST:
 The release process follows the two-commit model used by the ZenWave release workflow:
 
 1. Create `release/{artifact}/{version}` from the validated default-branch SHA.
-2. Update only the selected artifact family's canonical version to the release version.
+2. Update only the selected release family's canonical version to the release version.
 3. For OpenAPI or AsyncAPI, update the relevant `info.version` fields; do not generate content.
 4. Commit `Release {artifact} {version}`.
 5. Capture this exact commit SHA as the release commit.
-6. Update the selected artifact family to `development-version`.
+6. Update the selected release family to `development-version`.
 7. Commit `Prepare {artifact} {development-version}`.
 8. Push the temporary branch and open a pull request to `main`.
 9. Merge through the normal branch-protection path after required checks succeed. The pilot MUST use a merge commit rather than squash or rebase so the captured release commit is preserved in `main` history.
@@ -435,7 +451,7 @@ After the release PR is merged and the tag exists:
 1. Check out the immutable release commit with no persisted credentials.
 2. Re-run validation.
 3. Resolve all selected Maven coordinates with `manifest-core` and build the release JARs and checksums.
-4. Deploy each JAR with `maven-deploy-plugin:deploy-file`. The pilot uses a file-backed Maven repository; a remote Artifactory Maven repository is enabled later through configuration only.
+4. Deploy each JAR with `maven-deploy-plugin:deploy-file` to the repository's own GitHub Packages Maven registry at `https://maven.pkg.github.com/arcadia-editions/{service.repository}` (§12.4).
 5. Build the family-qualified generic file tree and publish it when generic Artifactory publication is configured; otherwise upload the proposed tree only as a workflow artifact.
 6. For OpenAPI or AsyncAPI, publish to Apicurio.
 7. Create the GitHub Release and attach the JARs and checksums.
@@ -467,7 +483,7 @@ In either case, the workflow creates a temporary final notes document by combini
 
 - Artifact family and version.
 - Source commit SHA.
-- Maven coordinates, repository URL when configured, and checksum.
+- Maven coordinates, GitHub Packages repository URL, and checksum.
 - Generic Artifactory tree root when that publisher is configured.
 - Apicurio group, artifact identifiers, and version when applicable.
 - Link to the architecture-manifest pull request when it has been created.
@@ -476,7 +492,7 @@ Versions containing a recognized prerelease component such as `-rc.1` MUST creat
 
 ### 11.6 GitHub Releases in a multi-artifact repository
 
-GitHub Releases remain useful because each one is anchored to the selected artifact family's prefixed tag and provides its scoped notes, checksums, and downloadable assets. They are artifact releases hosted in a shared repository, not releases of every artifact in that repository.
+GitHub Releases remain useful because each one is anchored to the selected release family's prefixed tag and provides its scoped notes, checksums, and downloadable assets. They are scoped releases hosted in a shared repository, not releases of every artifact in that repository.
 
 Each release MUST use:
 
@@ -485,7 +501,7 @@ tag:   {artifact}/v{version}
 title: {artifact} v{version}
 ```
 
-The release attaches only assets produced by the selected artifact family. The release body links to the previous release with the same tag prefix, not merely the chronologically previous repository release.
+The release attaches only assets produced by the selected release family. The release body links to the previous release with the same tag prefix, not merely the chronologically previous repository release.
 
 GitHub has one repository-level concept of the “latest” release. In an API-product repository, that marker is reserved for the stable `api-product` release because it represents the complete repository/service edition:
 
@@ -495,7 +511,7 @@ GitHub has one repository-level concept of the “latest” release. In an API-p
 | Prerelease `api-product` | Create with `--prerelease --latest=false` |
 | `zdl`, `openapi`, `asyncapi`, `spectral` | Create with `--latest=false` |
 
-Publishing an individual artifact release MUST NOT replace the full repository/service release as latest. Consumers identify the latest version of an individual artifact family by its tag prefix, manifest version, Maven metadata, or registry metadata. The repository Releases page remains a chronological combined feed, with artifact-scoped titles providing the necessary distinction.
+Publishing an individual artifact release MUST NOT replace the full repository/service release as latest. Consumers identify the latest version of an individual release family by its tag prefix, manifest version, Maven metadata, or registry metadata. The repository Releases page remains a chronological combined feed, with scoped titles providing the necessary distinction.
 
 ## 12. Maven JAR packaging and repository publication
 
@@ -511,7 +527,10 @@ META-INF/arcadia/artifact-metadata.json
 <artifact source files at their repository-relative paths>
 ```
 
-The path declared by the corresponding manifest artifact MUST exist at exactly that path inside the JAR. This is required because `manifest-core` resolves Maven content as:
+For a manifest-artifact package, the path declared by the corresponding
+artifact MUST exist at exactly that path inside the JAR. The service aggregate
+instead MUST contain `.arcadia/api-product.yml`. Manifest artifacts are resolved
+from Maven content as:
 
 ```text
 {repository}/{groupPath}/{artifactId}/{version}/{artifactId}-{version}.jar!/{artifact.path}
@@ -523,7 +542,7 @@ The path declared by the corresponding manifest artifact MUST exist at exactly t
 {
   "repository": "orders-checkout-api",
   "serviceId": "orders.checkout.orders-checkout",
-  "artifactType": "openapi",
+  "packageType": "openapi",
   "groupId": "com.arcadiaeditions.orders.checkout.orders-checkout",
   "groupPath": "com/arcadiaeditions/orders/checkout/orders-checkout",
   "artifactId": "openapi",
@@ -534,9 +553,11 @@ The path declared by the corresponding manifest artifact MUST exist at exactly t
 }
 ```
 
-The API-product JAR also includes a `components` object containing the canonical versions of ZDL, OpenAPI, and AsyncAPI found at the packaged commit.
+The service aggregate JAR also includes a `components` object containing the
+canonical versions of ZDL, OpenAPI, AsyncAPI, and AsyncAPI Client (when present)
+found at the packaged commit.
 
-JAR creation MUST be deterministic for a given source commit, manifest artifact, and version. Metadata timestamps are derived from the source commit, archive entries are sorted, and JAR metadata that varies by runner is normalized or omitted. Rebuilding an unchanged release MUST produce the same checksum.
+JAR creation MUST be deterministic for a given source commit, package unit, and version. Metadata timestamps are derived from the source commit, archive entries are sorted, and JAR metadata that varies by runner is normalized or omitted. Rebuilding an unchanged release MUST produce the same checksum.
 
 The JAR basename and its staged/published path use Maven repository convention. The workflow converts the resolved `groupId` to `groupPath` by replacing every dot with a path separator:
 
@@ -552,19 +573,19 @@ For the pilot OpenAPI example:
 com/arcadiaeditions/orders/checkout/orders-checkout/openapi/1.2.0/openapi-1.2.0.jar
 ```
 
-The coordinate-relative directory prefix `{groupPath}/{artifactId}/{version}/` is mandatory in the staged Maven tree, file-backed test repository, and remote Maven repository. Immutable releases use the exact basename shown above. A Maven repository MAY replace a `-SNAPSHOT` basename with its standard timestamped snapshot filename, but it MUST retain the same group-derived directory prefix and Maven metadata. The workflow MUST validate every `groupId` segment before using it as a path and MUST reject slashes, empty segments, `.` segments, `..` segments, or characters outside the supported Maven identifier policy.
+The coordinate-relative directory prefix `{groupPath}/{artifactId}/{version}/` is mandatory in the staged Maven tree, file-backed test repository, and the GitHub Packages Maven registry (§12.4). Immutable releases use the exact basename shown above. A Maven repository MAY replace a `-SNAPSHOT` basename with its standard timestamped snapshot filename, but it MUST retain the same group-derived directory prefix and Maven metadata. GitHub Packages exhibits exactly this timestamped-snapshot behavior while preserving the prefix. The workflow MUST validate every `groupId` segment before using it as a path and MUST reject slashes, empty segments, `.` segments, `..` segments, or characters outside the supported Maven identifier policy.
 
 The pilot packages the following entries:
 
-| Manifest artifact | Required JAR entries |
+| Package unit | Required JAR entries |
 | --- | --- |
 | `zdl` | `domain-model.zdl` |
 | `openapi` | `openapi.yml` |
 | `asyncapi` | `asyncapi.yml` and every owned, tracked `**/*.avsc` file |
 | `asyncapi-client` | `asyncapi-client.yml` and explicitly mapped supporting files, if any |
-| `api-product` | `.arcadia/api-product.yml`, the API definitions, Avro schemas, ZDL, and curated documentation |
+| Service aggregate | `.arcadia/api-product.yml`, the API definitions, Avro schemas, ZDL, and curated documentation |
 
-The packaging script MUST create a clean content staging directory and the coordinate-derived Maven output directory, copy only the closed source mapping for that artifact, add `META-INF/arcadia/artifact-metadata.json`, generate the JAR manifest outside the content staging tree, normalize entry timestamps to the source commit timestamp, and invoke the JDK tool with the equivalent of:
+The packaging script MUST create a clean content staging directory and the coordinate-derived Maven output directory, copy only the closed source mapping for that package unit, add `META-INF/arcadia/artifact-metadata.json`, generate the JAR manifest outside the content staging tree, normalize entry timestamps to the source commit timestamp, and invoke the JDK tool with the equivalent of:
 
 ```bash
 jar --create \
@@ -577,16 +598,16 @@ The exact implementation MAY use a sorted `jar` argument file when required for 
 
 ### 12.2 Coordinate resolution
 
-Coordinate identity MUST be resolved through `manifest-core`, not reconstructed from filenames in the workflow:
+Manifest-artifact coordinate identity MUST be resolved through `manifest-core`, not reconstructed from filenames in the workflow:
 
 ```text
 groupId                 = service.groupId ?: interpolate(config.groupIdExpression)
 artifactId              = artifact.artifactId ?: interpolate(config.artifactIdExpression)
-manifestEffectiveVersion = artifact.version ?: service.version ?: subdomain.version ?: domain.version
+manifestEffectiveVersion = artifact.version
 deploymentVersion       = canonical source version being built
 ```
 
-The resolver output MUST preserve both version values under different field names. Release preparation fails if the proposed manifest update would not make `manifestEffectiveVersion` equal `deploymentVersion`. Snapshot publication never changes the manifest and uses only `deploymentVersion`.
+`manifestEffectiveVersion` is simply the artifact's own declared version: the architecture schema requires `artifact.version` (§5.5), and `manifest-core` no longer falls back to `service.version`, `subdomain.version`, or `domain.version` for an artifact, so this is a direct read rather than a resolved fallback chain. The resolver output MUST preserve both version values under different field names. Release preparation fails if the proposed manifest update would not make `manifestEffectiveVersion` equal `deploymentVersion`. Snapshot publication never changes the manifest and uses only `deploymentVersion`.
 
 With the current pilot manifest, expected artifact coordinates are:
 
@@ -597,15 +618,12 @@ With the current pilot manifest, expected artifact coordinates are:
 | `asyncapi` | `asyncapi.yml`, `**/*.avsc` | `asyncapi` |
 | `asyncapi-client` | `asyncapi-client.yml` and any owned supporting files | `asyncapi-client` |
 
-The API-product package MUST be represented by a manifest artifact:
-
-```yaml
-- type: api-product
-  path: ".arcadia/api-product.yml"
-  artifactId: "orders-checkout-api"
-```
-
-It inherits the service-level released version in the central manifest. Its source descriptor contains the development version used by CI and release preparation.
+The API-product package is the service aggregate JAR; it is not a
+`ManifestArtifact` and the architecture manifest MUST NOT contain
+`type: api-product`. Its coordinates use the service group ID and repository
+name as the Maven artifact ID. The aggregate inherits the service-level released
+version in the central manifest, while `.arcadia/api-product.yml` contains the
+development version used by CI and release preparation.
 
 ### 12.3 Maven install and deploy
 
@@ -637,24 +655,31 @@ If the caller repository has no Maven Wrapper, the shared action uses the provis
 
 The Maven deploy plugin version MUST be pinned. Commands MUST run non-interactively and use an isolated settings file when credentials are required.
 
-### 12.4 Remote Maven repository placeholder
+This install/deploy validation targets an isolated file-backed repository as a CI integration-test fixture only. §12.4 specifies the GitHub Packages deployment actually used to publish snapshots and releases.
 
-The production Maven repository may later be an Artifactory Maven repository. Until one is available:
+### 12.4 GitHub Packages Maven publication
 
-- No real Artifactory URL, repository key, or credential is required for pilot acceptance.
-- Snapshot and release tests use file-backed Maven repositories.
-- Generated Maven repository trees are uploaded as GitHub Actions artifacts.
-- Remote deployment remains disabled unless all required repository variables are configured.
+GitHub Packages is the production Maven target for both snapshots and immutable releases. There is no central packages repository: each `*-api` repository publishes to its own package registry, derived deterministically from the repository rather than configured per environment:
 
-When a remote Maven repository is configured:
+```text
+https://maven.pkg.github.com/arcadia-editions/{service.repository}
+```
 
-- Snapshot jobs use the configured snapshot repository URL and repository ID.
-- Release jobs use the configured release repository URL and repository ID.
-- Release deployment MUST refuse to overwrite different content at an existing coordinate.
-- Re-running a release with an identical checksum MAY be treated as success.
-- Credentials and repository URLs MUST come from environment-scoped variables and secrets.
+For the pilot this resolves to `https://maven.pkg.github.com/arcadia-editions/orders-checkout-api`.
+
+- Snapshot jobs and release jobs both deploy to this same per-repository registry; GitHub Packages distinguishes mutable `-SNAPSHOT` coordinates from immutable release coordinates using standard Maven semantics, and supports snapshot versions with standard timestamped filenames (§12.1).
+- Publishing MUST use a token elevated with the `packages: write` permission (§17.1), scoped to the `*-api` repository being published. No separate stored Maven username/password secret is used (§17.4).
+- GitHub Packages rejects a deploy that attempts to re-publish an existing release version under the same coordinate with different content. This satisfies the requirement that release deployment MUST refuse to overwrite different content at an existing coordinate; enforcement is delegated to the registry rather than implemented in the workflow.
+- Re-running a release deploy with identical content MAY be treated as success once the workflow confirms the existing coordinate matches; a differing checksum at an existing immutable coordinate MUST fail the run.
+- GitHub Packages requires an authenticated token to read Maven content, even for a package in a public repository, not only to write it. Any consumer that resolves Maven content from a `*-api` repository's registry — including the released EventCatalog workflow (§15.4) — MUST present a credential authorized for at least `read:packages` on that repository; an unauthenticated read fails.
+
+File-backed Maven repositories are retained only as CI and integration-test fixtures (§9.2 step 8, §12.3). They are not a publication target: every snapshot and release deploy in the pilot goes to GitHub Packages as described above.
+
+This change affects only Maven-coordinate publication. It does not affect §12.5's Artifactory **generic** repository, which remains a separate, unchanged placeholder for a browsable file tree — dropping the Artifactory-Maven target does not drop Artifactory-generic.
 
 ### 12.5 Artifactory generic repository placeholder
+
+This placeholder is independent of §12.4. Moving Maven publication to GitHub Packages does not change, accelerate, or remove this section; the generic repository remains a future, unresolved placeholder exactly as before.
 
 In addition to the Maven repository, the design reserves an Artifactory **generic** repository for artifacts that should remain directly addressable as a tree of files over HTTP. This is a separate publication target from the Maven repository and MUST NOT use Maven coordinate layout or generated POM metadata.
 
@@ -668,7 +693,7 @@ The default logical layout is:
     {artifactFamily}/
       {version}/
         {repository-relative-path}
-        ...other files in the released artifact family
+        ...other files in the released family
         .arcadia/artifact-metadata.json
         .arcadia/checksums.sha256
 ```
@@ -683,7 +708,7 @@ orders-checkout-api/zdl/2.0.0/domain-model.zdl
 orders-checkout-api/api-product/3.0.0/SUMMARY.md
 ```
 
-This layout includes the artifact family because release trains are independent and may use the same semantic version for different content. Repository-relative paths remain unchanged below the version directory, so files are directly addressable over HTTP without opening a JAR.
+This layout includes the release family because release trains are independent and may use the same semantic version for different content. Repository-relative paths remain unchanged below the version directory, so files are directly addressable over HTTP without opening a JAR.
 
 The generic tree is a publication contract, not automatically a `manifest-core` content source. Its family-qualified layout cannot be represented for both artifacts and service documents by the current single Artifactory `contentUrlExpression`. If it is later required as a manifest source, the resolver mapping or an additional consolidated view MUST be designed and tested explicitly; the workflow MUST NOT silently activate an incompatible expression.
 
@@ -694,7 +719,7 @@ The implementation MUST treat the server, repository key, credentials, and exact
 - Placeholder values MUST NOT be activated in `zenwave-architecture.yml`.
 - Maven JAR deployment remains the primary package publication contract.
 
-When enabled later, a shared generic-publication adapter MUST upload only the selected artifact family's closed source mapping, preserve repository-relative paths, publish metadata and SHA-256 checksums, and apply the same immutable-release/idempotent-snapshot rules as the Maven and Apicurio publishers. The generic tree MUST NOT become an alternative source of version numbers; canonical source versions and manifest versions remain authoritative.
+When enabled later, a shared generic-publication adapter MUST upload only the selected release family's closed source mapping, preserve repository-relative paths, publish metadata and SHA-256 checksums, and apply the same immutable-release/idempotent-snapshot rules as the Maven and Apicurio publishers. The generic tree MUST NOT become an alternative source of version numbers; canonical source versions and manifest versions remain authoritative.
 
 ## 13. Apicurio publication
 
@@ -828,6 +853,7 @@ Before invoking the plugin, the workflow MUST use the pinned `manifest-core` res
 
 - Develop preflight loads artifacts and documents from Git with fallback disabled.
 - Released preflight loads every versioned artifact from Maven with fallback disabled, then loads service documents from Git with fallback disabled. The generic Artifactory tree is not an active manifest source in the pilot.
+- `manifest-core` does not fetch content itself: it resolves candidate URIs and leaves the read to the host, except for its JVM default archive-entry loader, which fetches unauthenticated. Because GitHub Packages requires an authenticated read even for public packages (§12.4), the released preflight MUST construct its `ZenWaveManifestLoader` with an authenticated archive-entry loader rather than rely on that unauthenticated default. See §15.4 for the credential this requires.
 - Both preflights record the resolved source URI and checksum for every input in the generation metadata.
 
 ### 15.2 Central execution model
@@ -877,7 +903,7 @@ allowFallback   = true
 linkSource      = maven
 ```
 
-Before this channel is enabled against a remote repository, the central manifest MUST activate and configure the Maven source in addition to its existing workspace and Git sources:
+The central manifest activates the Maven source alongside its existing workspace and Git sources:
 
 ```yaml
 config:
@@ -887,16 +913,21 @@ config:
     - git
   sources:
     maven:
-      provider: artifactory
-      server: "<MAVEN_REPOSITORY_SERVER_PLACEHOLDER>"
-      repository: "<MAVEN_RELEASE_REPOSITORY_PLACEHOLDER>"
+      provider: github
+      repository: "arcadia-editions/${service.repository}"
 ```
 
-These placeholders document the required shape only. They MUST NOT be committed as active configuration until real values are available. The file-backed integration fixture supplies its own Maven source configuration. The production manifest change that activates Maven resolution is reviewed configuration, not an implicit workflow mutation.
+`provider: github` MUST be used, not `artifactory`: GitHub Packages has no Artifactory-style `!/` archive-entry download endpoint, so the resolver downloads the whole JAR and extracts the declared entry locally. There is no Artifactory server behind this URL, and GitHub Packages is not Artifactory-compatible. The provider defaults `server` to `https://maven.pkg.github.com`, so the manifest MUST NOT declare it unless the organization moves to GitHub Enterprise; `repository` is required and MUST be `{owner}/{repo}`.
+
+Because each `*-api` repository publishes to its own package registry rather than one shared registry (§12.4), `repository` is interpolated per service from `${service.repository}`. Both the `github` Maven provider and runtime interpolation of `${service.repository}` inside `maven.repository` are `manifest-core` capabilities added in parallel with this specification; the released channel depends on a `manifest-core` version that supports both. Treat this as a pinned-dependency requirement on the catalog workflow's `manifest-core`/ZenWave SDK version (`ZENWAVE_SDK_VERSION`, §17.3), not as a version number to fix in advance here.
+
+GitHub Packages requires an authenticated request to read Maven content, even for a public package (§12.4). As described in §15.1, `manifest-core`'s only self-fetching path is its JVM default archive-entry loader, which fetches unauthenticated and therefore cannot read GitHub Packages. The released-catalog workflow MUST construct its `ZenWaveManifestLoader` with an authenticated archive-entry loader backed by a credential authorized for `read:packages` across every `*-api` repository (§17.2–§17.4). Supplying this loader is a mandatory precondition of the released preflight; without it, every Maven read in the preflight fails, and the workflow MUST stop rather than fall back to Git.
+
+Activating this configuration in the production manifest is reviewed configuration, not an implicit workflow mutation.
 
 Fallback is required because service documentation is not loaded from Maven artifacts. Before invoking the plugin, the preflight MUST resolve and read every declared versioned artifact from its Maven coordinate. This prevents a missing released artifact from silently falling back to mutable Git content. Git may supply service docs such as `SUMMARY.md` and `CHANGELOG.md`, but the catalog metadata and UI MUST label them as mutable documentation rather than released content.
 
-The released workflow remains deployment-disabled until a reachable Maven repository is configured. Its generation logic MUST still be tested with a file-backed Maven repository and a representative manifest fixture.
+The released workflow remains deployment-disabled until both the pinned `manifest-core` version that supports `${service.repository}` interpolation and the cross-repository `read:packages` credential are in place. Its generation logic MUST still be tested with a file-backed Maven repository and a representative manifest fixture in the meantime, and proven end to end against the real GitHub Packages registries once those two dependencies land.
 
 ### 15.5 Full rebuild policy
 
@@ -926,7 +957,7 @@ Until a hosting target is selected, the workflow uploads both generated source a
 
 - API-product CI needs no catalog publication credentials.
 - The cross-repository dispatch job uses a GitHub App installation token scoped only to `arcadia-editions-docs` and authorized for the selected dispatch API. If `repository_dispatch` is used, grant the minimum `contents: write` permission required by that endpoint; if `workflow_dispatch` is used instead, grant only the corresponding Actions workflow permission.
-- Catalog generation has `contents: read` and receives no Artifactory or Apicurio write credentials.
+- Catalog generation has `contents: read` and receives no Artifactory or Apicurio write credentials. The released channel additionally requires a read-only `read:packages` credential scoped across every `*-api` repository, used only to construct the authenticated archive-entry loader described in §15.4; the development channel, which reads only Git content, does not need it.
 - Static-site deployment, when enabled, uses a separate environment and only the permissions required by the selected host.
 - Develop concurrency is `event-catalog-develop`; new requests cancel an obsolete in-progress build.
 - Released concurrency is `event-catalog-released`; builds are serialized and not cancelled.
@@ -937,7 +968,7 @@ Until a hosting target is selected, the workflow uploads both generated source a
 
 The manifest PR is created only after remote Maven publication, required Apicurio publication, any enabled generic Artifactory publication, and GitHub Release creation succeed. This prevents the architecture from advertising a version that cannot be resolved by the released catalog or reporting an enabled publication target that is incomplete.
 
-While only the file-backed Maven test repository is configured, release workflows run in packaging/dry-run mode and MUST NOT open a live manifest PR. They may generate and upload the proposed manifest patch for review.
+During initial pilot bring-up, before a repository's GitHub Packages publication credentials and environments are configured (§20 Phase 0), release workflows run in packaging/dry-run mode and MUST NOT open a live manifest PR. They may generate and upload the proposed manifest patch for review. This is a Phase 0 bring-up state, not an ongoing condition: Maven publication itself is not gated behind a placeholder server (§12.4).
 
 Failure to create the manifest PR marks the final synchronization job as failed but MUST NOT delete an already published release. The manifest update MUST be independently rerunnable for repair.
 
@@ -950,11 +981,11 @@ In `arcadia-editions-docs/zenwave-architecture.yml`, locate the service by exact
 | `zdl` | Set `artifacts[type=zdl].version` |
 | `openapi` | Set `artifacts[type=openapi].version` |
 | `asyncapi` | Set both `artifacts[type=asyncapi].version` and, when present, `artifacts[type=asyncapi-client].version` |
-| `api-product` | Set service-level `version`; ensure the service has the `api-product` artifact declaration used for Maven coordinates |
+| `api-product` | Set service-level `version`; do not add an artifact entry |
 
 The workflow MUST NOT add a `tag` property because the current published schema sets `additionalProperties: false` and supports only `name`, `artifactId`, `type`, `path`, and `version` for an artifact.
 
-Because `manifest-core` lets an artifact inherit `service.version`, every independently released ZDL, OpenAPI, AsyncAPI, and AsyncAPI-client entry MUST have an explicit artifact version before the first API-product release changes the service-level version. This prevents an API-product release from accidentally changing the effective consumer version of another release train.
+The published schema requires `version` on every artifact (`$defs/artifact` requires `type`, `path`, and `version`), and `manifest-core` no longer lets an artifact inherit `service.version`. This is now a schema guarantee rather than a procedural precaution: every independently released ZDL, OpenAPI, AsyncAPI, and AsyncAPI-client entry MUST already carry an explicit artifact version, or the manifest fails schema validation outright — at all times, not merely before the first API-product release changes the service-level version. It also means a service aggregate release can no longer accidentally change the effective consumer version of another release train's artifact, because artifacts never inherit from the service.
 
 The update script MUST fail rather than edit when:
 
@@ -993,7 +1024,7 @@ Jobs elevate only what they need:
 | Prepare release PR | `contents: write`, `pull-requests: write` |
 | Push release tag | `contents: write` |
 | Create GitHub Release | `contents: write` |
-| Snapshot/release external publication | `contents: read` |
+| Snapshot/release external publication | `contents: read`, `packages: write` |
 | Manifest PR | GitHub App token scoped to docs repo: `contents: write`, `pull-requests: write` |
 
 `persist-credentials` MUST be false except in the narrowly scoped job or step that intentionally pushes a branch or tag.
@@ -1004,19 +1035,16 @@ Third-party actions MUST be pinned to full commit SHAs. Caller workflows MUST pa
 
 The pilot SHOULD use:
 
-- `artifact-snapshots`: snapshot Maven repository, optional generic Artifactory, and draft Apicurio credentials; no manual approval, restricted to `main`. No repository credential is required in file-backed test mode.
-- `artifact-releases`: release Maven repository, optional generic Artifactory, and Apicurio credentials; optional required reviewer, restricted to protected branches/tags. Each remote publisher is independently disabled when its required configuration is absent.
+- `artifact-snapshots`: GitHub Packages `packages: write` token for the repository's own Maven registry, optional generic Artifactory, and draft Apicurio credentials; no manual approval, restricted to `main`.
+- `artifact-releases`: GitHub Packages `packages: write` token for the repository's own Maven registry, optional generic Artifactory, and Apicurio credentials; optional required reviewer, restricted to protected branches/tags. Maven publication is always active; the generic Artifactory and Apicurio publishers remain independently disabled when their required configuration is absent.
 - `architecture-manifest`: GitHub App credentials for the cross-repository PR.
+- `event-catalog-released`: a read-only `read:packages` credential (GitHub App installation token or equivalent) authorized across every `*-api` repository, used only by the released-catalog workflow to construct the authenticated archive-entry loader described in §15.4.
 
 ### 17.3 Required variables
 
 Names may be adapted to organization conventions, but the implementation must define equivalents for:
 
 ```text
-MAVEN_RELEASE_REPOSITORY_URL          # optional until a server exists
-MAVEN_RELEASE_REPOSITORY_ID           # optional until a server exists
-MAVEN_SNAPSHOT_REPOSITORY_URL         # optional until a server exists
-MAVEN_SNAPSHOT_REPOSITORY_ID          # optional until a server exists
 MAVEN_DEPLOY_PLUGIN_VERSION           # pinned exact version
 MAVEN_INSTALL_PLUGIN_VERSION          # pinned exact version
 ARTIFACTORY_GENERIC_SERVER            # reserved placeholder; not used by the pilot
@@ -1025,25 +1053,29 @@ ARTIFACTORY_GENERIC_SNAPSHOT_REPOSITORY # reserved placeholder; mutable snapshot
 APICURIO_REGISTRY_URL
 APICURIO_MAVEN_PLUGIN_VERSION
 JBANG_VERSION                         # pinned exact version
-ZENWAVE_SDK_VERSION
+ZENWAVE_SDK_VERSION                   # also pins the manifest-core version; released catalog requires a version supporting ${service.repository} interpolation (§15.4)
 ARCHITECTURE_REPOSITORY              # default: arcadia-editions/arcadia-editions-docs
 ARCHITECTURE_MANIFEST_PATH           # default: zenwave-architecture.yml
 ARCHITECTURE_APP_ID
+EVENT_CATALOG_PACKAGES_APP_ID         # GitHub App ID for the cross-repository read:packages credential used by released catalog generation (§15.4, §15.7)
 ```
+
+The GitHub Packages Maven registry URL is not a configured variable: it is derived deterministically as `https://maven.pkg.github.com/arcadia-editions/{service.repository}` (§12.4), identically for snapshots and releases.
 
 ### 17.4 Required secrets
 
 ```text
-MAVEN_REPOSITORY_USERNAME            # only when a remote repository is configured
-MAVEN_REPOSITORY_PASSWORD_OR_TOKEN   # only when a remote repository is configured
 ARTIFACTORY_GENERIC_USERNAME         # only when generic publication is enabled
 ARTIFACTORY_GENERIC_PASSWORD_OR_TOKEN # only when generic publication is enabled
 APICURIO_USERNAME                    # when required by the registry
 APICURIO_PASSWORD_OR_TOKEN           # when required by the registry
 ARCHITECTURE_APP_PRIVATE_KEY
+EVENT_CATALOG_PACKAGES_APP_PRIVATE_KEY # GitHub App private key paired with EVENT_CATALOG_PACKAGES_APP_ID (§15.4, §15.7)
 ```
 
-OIDC or short-lived identity federation SHOULD replace long-lived Maven-repository or Apicurio credentials when supported. The pilot may begin with environment-scoped tokens, but it MUST NOT store credentials in repositories or generated packages.
+Maven publication to GitHub Packages does not use a stored username/password secret. The job's own short-lived `GITHUB_TOKEN`, elevated with `packages: write` (§17.1), authenticates the deploy to the repository's own registry; there is no `MAVEN_REPOSITORY_USERNAME` or `MAVEN_REPOSITORY_PASSWORD_OR_TOKEN` secret.
+
+OIDC or short-lived identity federation SHOULD replace long-lived Apicurio or generic Artifactory credentials when supported; Maven publication already uses the workflow's short-lived `GITHUB_TOKEN`. The pilot may begin with environment-scoped tokens for Apicurio and generic Artifactory, but it MUST NOT store credentials in repositories or generated packages.
 
 ## 18. Concurrency and idempotency
 
@@ -1053,7 +1085,7 @@ OIDC or short-lived identity federation SHOULD replace long-lived Maven-reposito
 - Manifest concurrency: `manifest-{repository}-{artifact}` with cancellation disabled.
 - Development catalog concurrency: `event-catalog-develop` with cancellation enabled.
 - Released catalog concurrency: `event-catalog-released` with cancellation disabled.
-- Only one release of a given artifact family may execute at a time.
+- Only one release of a given release family may execute at a time.
 - Release validation MUST reject an existing conflicting tag, release, branch, Maven coordinate/checksum, or enabled registry version.
 - Every externally mutating step MUST be safely rerunnable after partial failure.
 
@@ -1082,10 +1114,10 @@ The workflow MUST never attempt to delete a published immutable artifact automat
 
 1. Audit current `orders-checkout-api` tags, Maven coordinates, and Apicurio artifacts.
 2. Choose explicit initial development versions without overwriting published releases.
-3. Prepare a reviewed bootstrap manifest change that adds the `api-product` artifact entry and records audited current artifact versions; do not invent release history.
-4. Configure GitHub Environments, variables, and secrets.
-5. Create a GitHub App or equivalent narrowly scoped credential for docs-repository PRs and catalog dispatch.
-6. Add workflow test fixtures and dry-run publication endpoints where practical.
+3. Prepare a reviewed bootstrap manifest change that records an explicit audited `version` for every existing artifact entry. Because the schema now requires `version` on every artifact (§5.5), this step is a prerequisite for the manifest validating at all, not just a data-quality courtesy ahead of a later API-product release. Do not add an `api-product` artifact entry or invent release history.
+4. Configure GitHub Environments, variables, and secrets, including each repository's GitHub Packages `packages: write` permission (§17.1) and the `EVENT_CATALOG_PACKAGES_APP_ID` / `EVENT_CATALOG_PACKAGES_APP_PRIVATE_KEY` credential used for released-catalog reads (§17.2–§17.4).
+5. Create a GitHub App or equivalent narrowly scoped credential for docs-repository PRs, catalog dispatch, and cross-repository `read:packages` access for the released catalog.
+6. Add workflow test fixtures and dry-run publication endpoints where practical for the publishers that remain placeholders (generic Artifactory).
 
 ### Phase 1: shared CI and packaging
 
@@ -1100,7 +1132,7 @@ The workflow MUST never attempt to delete a published immutable artifact automat
 
 ### Phase 2: snapshots
 
-1. Implement snapshot JAR deployment to an isolated file-backed Maven repository.
+1. Implement snapshot JAR deployment to the repository's own GitHub Packages Maven registry (§12.4), reusing the file-backed fixture from Phase 1/§9.2 only for CI-time integration testing.
 2. Implement Apicurio CLI publication using `API_INFO_VERSION`.
 3. Prove that OpenAPI and AsyncAPI `-SNAPSHOT` versions become drafts.
 4. Prove that one merged change can validate, package, and publish snapshots for multiple affected families in the stable loop order.
@@ -1114,13 +1146,14 @@ The workflow MUST never attempt to delete a published immutable artifact automat
 4. Prove the two-commit release/next-snapshot model.
 5. Prove prefixed tags and artifact-scoped GitHub Releases coexist in one repository.
 6. Prove both release-notes paths: a committed deterministic notes file and the generated fallback when that optional file is absent.
-7. Rehearse one pilot release for each artifact family with a disposable Git remote and file-backed Maven repository; do not represent the rehearsal as an official published release.
+7. Rehearse one pilot release for each release family with a disposable Git remote and file-backed Maven repository; do not represent the rehearsal as an official published release.
 8. Prove draft-to-enabled promotion in Apicurio.
 9. Prove GitHub Release assets, Maven coordinates, JAR contents, and checksums.
+10. Prove that a snapshot and a release artifact are actually deployed to and resolvable from the real `orders-checkout-api` GitHub Packages Maven registry (§12.4), not only the file-backed rehearsal fixture from step 7.
 
 ### Phase 4: architecture synchronization
 
-1. Add artifact versions to the pilot service entry through a reviewed docs PR.
+1. Add an explicit `version` to every existing artifact entry for the pilot service through a reviewed docs PR. This is required for the manifest to validate at all now that the schema requires `version` on every artifact (§5.5, §16.2), not only in preparation for a later API-product release.
 2. Implement the cross-repository manifest update workflow.
 3. Validate the updated manifest against its published schema.
 4. Prove that asyncapi and asyncapi-client versions update together.
@@ -1136,10 +1169,11 @@ The workflow MUST never attempt to delete a published immutable artifact automat
 
 1. Add the central `arcadia-editions-docs` receiver workflow.
 2. Implement full development generation with `jbang zw -p EventCatalogPlugin` and Git-preferred content.
-3. Implement released generation with Maven-preferred content and strict artifact preflight.
+3. Implement released generation with Maven-preferred content, strict artifact preflight, and the authenticated archive-entry loader required to read GitHub Packages (§15.1, §15.4).
 4. Prove cross-repository develop dispatch from `orders-checkout-api`.
 5. Prove released generation with a representative file-backed Maven repository fixture.
 6. Upload separate develop and released catalog artifacts without one overwriting the other.
+7. Once the pinned `manifest-core` version supporting `${service.repository}` interpolation and the `read:packages` credential (§15.4, §15.7) are both available, prove released generation end to end against the real GitHub Packages registries.
 
 ### Phase 7: rollout
 
@@ -1147,7 +1181,7 @@ After the pilot acceptance criteria pass, roll out thin callers and initial vers
 
 ## 21. Acceptance criteria
 
-The file-backed pilot is complete only when all of the following are demonstrated. Operations that require a durable remote Maven repository—official immutable publication, a live architecture-manifest PR, and released-catalog deployment—MUST be exercised against disposable integration fixtures and remain disabled in production until the repository variables are configured. Once a remote repository exists, the same criteria MUST pass end to end against the real environments before production release is enabled:
+The pilot is complete only when all of the following are demonstrated. Maven publication targets each repository's real GitHub Packages registry (§12.4); it is not gated behind a placeholder server, and the criteria below require real publication there, not merely file-backed staging. Two other prerequisites remain genuinely pending until Phase 0 configuration and the parallel `manifest-core` work land: a live architecture-manifest PR requires the GitHub App credential configured in Phase 0, and released-catalog deployment additionally requires the cross-repository `read:packages` credential and a `manifest-core` version supporting `${service.repository}` interpolation (§15.4). Until those two land, exercise the corresponding criteria against disposable integration fixtures; once they land, the same criteria MUST pass end to end against the real environments before production release is enabled:
 
 - A ZDL-only PR runs ZDL and API-product validation without running OpenAPI or AsyncAPI validation.
 - An OpenAPI-only PR runs OpenAPI and API-product validation.
@@ -1157,7 +1191,8 @@ The file-backed pilot is complete only when all of the following are demonstrate
 - Multi-family CI and snapshot execution does not require copied per-type workflows or an expanded dynamic job matrix; logs and summaries still identify each family separately.
 - No CI workflow generates or modifies API source files.
 - Pull-request CI has no publication credentials and performs no external writes.
-- A trusted-branch push publishes snapshots only for changed artifact families.
+- A trusted-branch push publishes snapshots only for changed release families.
+- A trusted-branch snapshot deploys Maven snapshot JARs to the changed repository's own GitHub Packages registry (§12.4) using GitHub Packages' standard `-SNAPSHOT` semantics, not only to a file-backed repository.
 - OpenAPI and AsyncAPI snapshots register as Apicurio drafts using `info.version`.
 - Repeated snapshot publication is idempotent.
 - No push, merge, tag, CI completion, or snapshot completion automatically starts an immutable artifact release.
@@ -1169,18 +1204,19 @@ The file-backed pilot is complete only when all of the following are demonstrate
 - A stable `api-product` GitHub Release is marked as repository-wide latest; later ZDL, OpenAPI, AsyncAPI, prerelease API-product, or Spectral releases do not replace it.
 - The tag points to the release-version commit rather than the next-snapshot or merge commit.
 - An OpenAPI or AsyncAPI release promotes the matching Apicurio draft to enabled.
-- A release never overwrites different immutable content.
+- A release never overwrites different immutable content; a redeploy attempt at an existing Maven release coordinate with different content is rejected by GitHub Packages itself (§12.4).
 - A successful artifact release opens the correct architecture-manifest PR.
 - The manifest PR updates only the matching artifact version, or service version for an API-product release.
-- The resulting architecture manifest validates against its published schema.
+- The resulting architecture manifest validates against its published schema, including the now-required `version` on every artifact entry; a manifest missing an artifact version fails validation, and no artifact silently inherits `service.version`, `subdomain.version`, or `domain.version` (§5.5, §16.2).
 - `spectral/dist/spectral.js` is generated and verified without a committed copy on `main`; each release tag points to an isolated commit containing the bundle, and the bundle is downloadable by immutable tag URL and GitHub Release asset.
-- Every JAR contains its manifest-declared artifact path and is readable through `manifest-core` after `maven-deploy-plugin:deploy-file` publishes it to the file-backed test repository.
+- Every JAR contains its manifest-declared artifact path and is readable through `manifest-core` after `maven-deploy-plugin:deploy-file` publishes it to the file-backed test repository (a CI integration-test fixture, §12.3).
+- A released JAR is additionally readable through `manifest-core` after it is deployed to the pilot repository's real GitHub Packages Maven registry, using `provider: github` resolution (§12.4, §15.4).
 - Maven coordinates match manifest-core resolution, including explicit service/artifact overrides.
 - Every staged and immutable-release Maven JAR resides under `{groupId with dots replaced by path separators}/{artifactId}/{version}/{artifactId}-{version}.jar`; timestamped snapshots retain the same group-derived directory prefix.
 - An AsyncAPI family release produces separate `asyncapi` and `asyncapi-client` JARs when both artifacts are declared.
 - The dry-run generic Artifactory output preserves repository-relative files under `{service.repository}/{artifactFamily}/{version}/` and includes metadata and checksums.
 - A relevant merge in the pilot repository dispatches and fully regenerates the development catalog.
-- A manifest version merge fully regenerates the released catalog using Maven-preferred artifact content.
+- A manifest version merge fully regenerates the released catalog using Maven-preferred artifact content, reading GitHub Packages through an authenticated archive-entry loader; an unauthenticated default loader cannot read this content and MUST NOT be relied on (§15.1, §15.4).
 - Development and released catalog outputs are published independently.
 - All reusable workflow references and third-party actions are pinned immutably.
 - Partial failures can be repaired without deleting or duplicating valid releases.

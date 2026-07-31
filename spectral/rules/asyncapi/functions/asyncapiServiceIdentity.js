@@ -15,6 +15,17 @@ module.exports = createRule((document, path, report, context) => {
   }
 
   const expectedPath = `${identity.service}-api/asyncapi.yml`;
+  const githubRepository = globalThis.process?.env?.GITHUB_REPOSITORY?.split('/').pop();
+  if (githubRepository) {
+    if (githubRepository !== `${identity.service}-api`) {
+      report(
+        `Provider repository must be "${identity.service}-api", found "${githubRepository}".`,
+        child(path, 'id')
+      );
+    }
+    return;
+  }
+
   if (!sourcePath.endsWith(expectedPath)) {
     report(`Provider AsyncAPI file path must end with "${expectedPath}".`, child(path, 'id'));
   }
