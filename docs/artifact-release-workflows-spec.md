@@ -28,7 +28,7 @@ Normative terms such as **MUST**, **MUST NOT**, **SHOULD**, and **MAY** describe
 - Register OpenAPI and AsyncAPI artifacts in Apicurio Registry using the Maven plugin in CLI mode.
 - Use the API document's `info.version` as the Apicurio version source.
 - Create GitHub Releases for immutable releases.
-- Update released versions in `arcadia-editions-docs/zenwave-architecture.yml` through a cross-repository pull request.
+- Update released versions in `arcadia-editions-architecture/zenwave-architecture.yml` through a cross-repository pull request.
 - Build, verify, version, and publish the shared Spectral rules bundle.
 - Generate and publish separate development and released EventCatalog sites from the complete architecture manifest.
 - Keep release mechanics common while isolating artifact-specific validation, versioning, packaging, and publication behavior.
@@ -207,7 +207,7 @@ Caller workflows MUST pin the shared workflow by a full commit SHA or immutable 
 
 ### 7.3 Architecture repository
 
-`arcadia-editions-docs` adds only a thin receiver/caller:
+`arcadia-editions-architecture` adds only a thin receiver/caller:
 
 ```text
 .github/workflows/
@@ -858,7 +858,7 @@ Before invoking the plugin, the workflow MUST use the pinned `manifest-core` res
 
 ### 15.2 Central execution model
 
-Catalog generation is centralized in `arcadia-editions-docs`, where `zenwave-architecture.yml` lives. API-product repositories do not generate or commit catalog output themselves.
+Catalog generation is centralized in `arcadia-editions-architecture`, where `zenwave-architecture.yml` lives. API-product repositories do not generate or commit catalog output themselves.
 
 The central repository contains a thin receiver workflow that calls the reusable `api-product-workflows/.github/workflows/event-catalog.yml`. Central execution provides one concurrency boundary for changes arriving from multiple service repositories.
 
@@ -869,7 +869,7 @@ The development catalog represents the latest trusted `main` content across ever
 Trigger sequence:
 
 1. A relevant artifact or documentation change merges into `main` in any `*-api` repository.
-2. Its successful CI workflow sends a cross-repository dispatch to `arcadia-editions-docs` with event type `event-catalog-develop`.
+2. Its successful CI workflow sends a cross-repository dispatch to `arcadia-editions-architecture` with event type `event-catalog-develop`.
 3. The central receiver coalesces concurrent requests and regenerates the complete catalog.
 
 Generation options:
@@ -891,7 +891,7 @@ Trigger sequence:
 
 1. An artifact release opens its architecture-manifest PR.
 2. The PR is reviewed and merged.
-3. A push to `arcadia-editions-docs/main` changing `zenwave-architecture.yml` invokes the released catalog workflow.
+3. A push to `arcadia-editions-architecture/main` changing `zenwave-architecture.yml` invokes the released catalog workflow.
 4. The workflow regenerates the complete released catalog.
 
 Generation options:
@@ -956,7 +956,7 @@ Until a hosting target is selected, the workflow uploads both generated source a
 ### 15.7 Permissions and dispatch credentials
 
 - API-product CI needs no catalog publication credentials.
-- The cross-repository dispatch job uses a GitHub App installation token scoped only to `arcadia-editions-docs` and authorized for the selected dispatch API. If `repository_dispatch` is used, grant the minimum `contents: write` permission required by that endpoint; if `workflow_dispatch` is used instead, grant only the corresponding Actions workflow permission.
+- The cross-repository dispatch job uses a GitHub App installation token scoped only to `arcadia-editions-architecture` and authorized for the selected dispatch API. If `repository_dispatch` is used, grant the minimum `contents: write` permission required by that endpoint; if `workflow_dispatch` is used instead, grant only the corresponding Actions workflow permission.
 - Catalog generation has `contents: read` and receives no Artifactory or Apicurio write credentials. The released channel additionally requires a read-only `read:packages` credential scoped across every `*-api` repository, used only to construct the authenticated archive-entry loader described in §15.4; the development channel, which reads only Git content, does not need it.
 - Static-site deployment, when enabled, uses a separate environment and only the permissions required by the selected host.
 - Develop concurrency is `event-catalog-develop`; new requests cancel an obsolete in-progress build.
@@ -974,7 +974,7 @@ Failure to create the manifest PR marks the final synchronization job as failed 
 
 ### 16.2 Update mapping
 
-In `arcadia-editions-docs/zenwave-architecture.yml`, locate the service by exact `repository: orders-checkout-api` and update:
+In `arcadia-editions-architecture/zenwave-architecture.yml`, locate the service by exact `repository: orders-checkout-api` and update:
 
 | Released family | Manifest update |
 | --- | --- |
@@ -996,7 +996,7 @@ The update script MUST fail rather than edit when:
 
 ### 16.3 Pull-request behavior
 
-- Target repository: `arcadia-editions/arcadia-editions-docs`.
+- Target repository: `arcadia-editions/arcadia-editions-architecture`.
 - Target branch: `main`.
 - Branch: `automation/{service-repository}/{artifact}/{version}`.
 - Commit: `Update {service-repository} {artifact} to {version}`.
@@ -1054,7 +1054,7 @@ APICURIO_REGISTRY_URL
 APICURIO_MAVEN_PLUGIN_VERSION
 JBANG_VERSION                         # pinned exact version
 ZENWAVE_SDK_VERSION                   # also pins the manifest-core version; released catalog requires a version supporting ${service.repository} interpolation (§15.4)
-ARCHITECTURE_REPOSITORY              # default: arcadia-editions/arcadia-editions-docs
+ARCHITECTURE_REPOSITORY              # default: arcadia-editions/arcadia-editions-architecture
 ARCHITECTURE_MANIFEST_PATH           # default: zenwave-architecture.yml
 ARCHITECTURE_APP_ID
 EVENT_CATALOG_PACKAGES_APP_ID         # GitHub App ID for the cross-repository read:packages credential used by released catalog generation (§15.4, §15.7)
@@ -1167,7 +1167,7 @@ The workflow MUST never attempt to delete a published immutable artifact automat
 
 ### Phase 6: EventCatalog lifecycle
 
-1. Add the central `arcadia-editions-docs` receiver workflow.
+1. Add the central `arcadia-editions-architecture` receiver workflow.
 2. Implement full development generation with `jbang zw -p EventCatalogPlugin` and Git-preferred content.
 3. Implement released generation with Maven-preferred content, strict artifact preflight, and the authenticated archive-entry loader required to read GitHub Packages (§15.1, §15.4).
 4. Prove cross-repository develop dispatch from `orders-checkout-api`.

@@ -22,7 +22,7 @@ on:
         type: string
       architecture_repository:
         required: false
-        default: arcadia-editions/arcadia-editions-docs
+        default: arcadia-editions/arcadia-editions-architecture
         type: string
       architecture_ref:
         required: false
