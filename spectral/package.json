@@ -1,6 +1,5 @@
 {
   "name": "arcadia-editions-spectral-rules",
-  "version": "0.2.0-SNAPSHOT",
   "private": true,
   "scripts": {
     "bundle": "node scripts/bundle-spectral.js",

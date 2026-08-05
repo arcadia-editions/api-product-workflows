@@ -40,77 +40,33 @@ CI does not compare against a committed bundle. A successful build proves that t
 
 ## Spectral release
 
-The release workflow is started manually with two inputs:
+The release workflow is started manually with a single input:
 
 - `version`: the release version, for example `0.1.0`.
-- `development-version`: the next version ending in `-SNAPSHOT`, for example `0.2.0-SNAPSHOT`.
 
-The version on `main` must initially match `{version}-SNAPSHOT`. For the example above, `main` must contain `0.1.0-SNAPSHOT`.
-
-### Pull-request authentication
-
-The workflow pushes the temporary `release/spectral/v{version}` branch, creates its pull request, and merges it using the job's `GITHUB_TOKEN`. No personal access token or separate release token is required.
-
-The job grants `contents: write` and `pull-requests: write`. Repository or organization policy must also enable **Settings > Actions > General > Workflow permissions > Allow GitHub Actions to create and approve pull requests**. This policy is independent of the permissions declared in the workflow; when it is disabled, GitHub rejects `gh pr create` with the `createPullRequest` GraphQL error.
-
-The workflow does not use GitHub's native auto-merge feature. It periodically attempts an immediate `gh pr merge --merge` and succeeds once branch-protection requirements are satisfied. If GitHub requires manual approval for workflow runs or pull-request reviews, the release job waits for that approval.
-
-The workflow never commits or pushes directly to `main`. Both version commits are made directly on temporary branches. The `release/spectral/v{version}` branch reaches `main` only through its pull request, so branch protection remains authoritative.
-
-### Branching model
-
-The release commit and next-development commit are independent children of the same `main` base commit `B`:
-
-```text
-                           spectral/v0.1.0
-                                  |
-                                  v
-                    R  release 0.1.0
-                   /   package.json + package-lock.json
-                  /    dist/spectral.js
-                 /
-                B  main: 0.1.0-SNAPSHOT, no dist
-                 \
-                  \
-                   D  release/spectral/v0.1.0
-                   |  prepare 0.2.0-SNAPSHOT, no dist
-                    \
-                     M  merge commit on main
-```
-
-`R` is never merged into `main`. It is retained by the `spectral/v0.1.0` tag.
-
-`D` is created from `B`, not from `R`. It is committed directly on `release/spectral/v{version}` and merged into `main` through the normal pull-request and branch-protection process. A successful merge deletes this temporary branch. A stale branch left by a failed attempt must be deleted before retrying the same release. Consequently, neither `D` nor the resulting `main` contains `dist/spectral.js`, and no follow-up deletion commit is necessary.
+`spectral/package.json` carries no `version` field. Nothing reads it: the bundle is built purely from `spectral-rules.yml`, `validate-artifact.sh` always rebuilds from source, and the two distribution channels below key off the git tag name, not any committed version metadata. The release version only ever exists as the manually supplied `version` input and the resulting tag/release name.
 
 ### Release sequence
 
-The workflow performs these operations:
+The workflow performs these operations directly on `main`'s current commit, with no intermediate branches or pull requests:
 
-1. Check out `main` and record its commit as `B`.
-2. Validate the release version, next-development version, current package version, and absence of the target tag.
-3. Create a temporary local release branch from `B`.
-4. Change the package version to the release version.
-5. Update the lock file, run `npm ci`, build the bundle, and verify it.
-6. Force-add the ignored `spectral/dist/spectral.js` and create release commit `R`.
-7. Return to `B` and create `release/spectral/v{version}`.
-8. Change the package version to the requested next snapshot.
-9. Update the lock file, build and verify again, and remove only the generated working-tree copy of the bundle.
-10. Commit `package.json` and `package-lock.json` as `D`; `dist/` remains absent from the commit.
-11. Push `release/spectral/v{version}` and merge its pull request into `main`.
-12. Verify that `R` is a direct child of `B` and that `D` is present in the freshly fetched `main`.
-13. Create and push the annotated tag `spectral/v{version}` pointing to `R`.
-14. Check out `R`, generate the checksum, and create the GitHub Release.
+1. Check out `main`.
+2. Validate that `version` is valid semantic versioning and that tag `spectral/v{version}` does not already exist.
+3. Run `npm ci`, build the bundle, and verify it.
+4. Generate the checksum.
+5. Create and push the annotated tag `spectral/v{version}` pointing directly at the checked-out `main` commit.
+6. Create the GitHub Release from that tag, uploading the bundle and checksum.
 
-The temporary release branch is local to the workflow runner and is never pushed. When the runner disappears, the tag continues to keep `R` and its bundle reachable.
+The job only needs `contents: write` to push the tag — no pull request is created, so no branch-protection or "Allow GitHub Actions to create and approve pull requests" setting is involved.
 
 ## What is stored where
 
-| Location | Version | Contains `dist/spectral.js` | Lifetime |
-| --- | --- | --- | --- |
-| Pull request or `main` | Snapshot | No | Repository history |
-| Spectral CI artifact | Source commit under test | Yes | Seven days |
-| `spectral/v{version}` tag | Release | Yes | Until the tag is deleted |
-| GitHub Release asset | Release | Yes, with checksum | Until the GitHub Release or asset is deleted |
+| Location | Contains `dist/spectral.js` | Lifetime |
+| --- | --- | --- |
+| `main` | No | Repository history |
+| Spectral CI artifact | Yes | Seven days |
+| `spectral/v{version}` tag | Yes | Until the tag is deleted |
+| GitHub Release asset | Yes, with checksum | Until the GitHub Release or asset is deleted |
 
 ## Accessing a released bundle
 
@@ -159,10 +115,8 @@ The generated `dist/` directory remains ignored and should not be committed from
 ## Invariants
 
 - `main` never requires `spectral/dist/spectral.js`.
-- The workflow never commits or pushes directly to `main`; only the `release/spectral/v{version}` pull-request merge changes `main`.
+- The workflow never commits to `main`; it only pushes the release tag.
 - CI artifacts are temporary and are not promoted to releases.
-- A release rebuilds from the selected `main` source commit.
-- The release tag points to the isolated release commit, not to `main`, the next-development commit, or the merge commit.
-- The `release/spectral/v{version}` branch starts from the same `main` base as the isolated release commit.
-- Only the tagged release commit contains the committed bundle.
+- A release rebuilds from the selected `main` source commit and tags that commit directly.
+- `spectral/package.json` carries no version field; the release version exists only as the workflow input and the resulting tag/release name.
 - Release tags are immutable distribution references.
