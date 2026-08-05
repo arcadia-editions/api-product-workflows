@@ -1,4 +1,4 @@
-name: Provision Kafka
+name: Provision Kafka (plan)
 
 on:
   workflow_call:
@@ -12,15 +12,14 @@ on:
         required: false
         default: main
         type: string
-      asyncapi_file:
-        description: Path to the AsyncAPI file relative to the service repository root.
+      architecture_manifest_uri:
         required: false
-        default: asyncapi.yml
+        default: https://raw.githubusercontent.com/arcadia-editions/arcadia-editions-architecture/main/zenwave-architecture.yml
         type: string
       server:
-        description: Target server/profile passed to the generator.
+        description: Target server/profile passed to the generator. Plan always targets the develop profile.
         required: false
-        default: staging
+        default: develop
         type: string
       avro_imports:
         description: Comma-separated Avro schema files or folders, relative to the service repository root, loaded before owned schemas are bundled.
@@ -28,12 +27,10 @@ on:
         default: ""
         type: string
       java_distribution:
-        description: Java distribution used by the pipeline.
         required: false
         default: temurin
         type: string
       java_version:
-        description: Java version used by the pipeline.
         required: false
         default: "21"
         type: string
@@ -42,13 +39,16 @@ on:
         required: false
         default: true
         type: boolean
+    secrets:
+      checkout_token:
+        required: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  generate-terraform:
-    name: Generate Terraform
+  plan:
+    name: Generate and plan Terraform
     runs-on: ubuntu-latest
     env:
       TF_IN_AUTOMATION: "true"
@@ -67,49 +67,66 @@ jobs:
       TF_VAR_schema_registry_rest_endpoint: ${{ vars.CONFLUENT_SCHEMA_REGISTRY_REST_ENDPOINT }}
       TF_VAR_schema_registry_api_key: ${{ secrets.CONFLUENT_SCHEMA_REGISTRY_API_KEY }}
       TF_VAR_schema_registry_api_secret: ${{ secrets.CONFLUENT_SCHEMA_REGISTRY_API_SECRET }}
+      TF_VAR_provisioned_from: ${{ format('{0}@{1}', github.ref_name, github.sha) }}
       AVRO_IMPORTS: ${{ inputs.avro_imports }}
 
     steps:
       - name: Checkout service repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: arcadia-editions/${{ inputs.service_repo }}
           path: service-repo
 
       - name: Checkout shared pipeline repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: arcadia-editions/api-product-workflows
           ref: ${{ inputs.pipeline_ref }}
+          token: ${{ secrets.checkout_token || github.token }}
           path: pipeline-repo
 
       - name: Set up Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@d7793b545071e98d581d3bf084a51c3213318a07 # v4
         with:
           distribution: ${{ inputs.java_distribution }}
           java-version: ${{ inputs.java_version }}
 
       - name: Set up JBang
-        uses: jbangdev/setup-jbang@main
+        uses: jbangdev/setup-jbang@cc28889678db839e29433f42f9ff25f148b6d8de # main
+        with:
+          version: 0.138.0
 
       - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+
+      - name: Resolve AsyncAPI artifacts from the architecture manifest
+        id: resolve
+        shell: bash
+        env:
+          MANIFEST_URI: ${{ inputs.architecture_manifest_uri }}
+        run: |
+          repository="${{ inputs.service_repo }}"
+          inventory="$(jbang --quiet ./pipeline-repo/scripts/artifacts/ManifestTool.java list "$MANIFEST_URI" "$repository")"
+          files="$(jq -r '[.[] | select(.type == "asyncapi" or .type == "asyncapi-client")] | map(.path) | join(",")' <<< "$inventory")"
+          [[ -n "$files" ]] || { echo "no asyncapi or asyncapi-client artifact declared for $repository" >&2; exit 1; }
+          echo "asyncapi_files=$files" >> "$GITHUB_OUTPUT"
 
       - name: Generate Terraform from AsyncAPI
         shell: bash
         run: |
-          chmod +x ./pipeline-repo/scripts/provision-kafka.sh
-          ./pipeline-repo/scripts/provision-kafka.sh \
+          chmod +x ./pipeline-repo/scripts/terraform/provision-kafka.sh
+          ./pipeline-repo/scripts/terraform/provision-kafka.sh \
             ./service-repo \
             ./pipeline-repo \
-            "${{ inputs.asyncapi_file }}" \
-            "${{ inputs.server }}"
+            "${{ steps.resolve.outputs.asyncapi_files }}" \
+            "${{ inputs.server }}" \
+            "${{ inputs.service_repo }}"
 
       - name: Check Terraform inputs
         shell: bash
         run: |
-          chmod +x ./pipeline-repo/scripts/assert-terraform-env.sh
-          ./pipeline-repo/scripts/assert-terraform-env.sh \
+          chmod +x ./pipeline-repo/scripts/terraform/assert-terraform-env.sh
+          ./pipeline-repo/scripts/terraform/assert-terraform-env.sh \
             TF_VAR_confluent_cloud_api_key \
             TF_VAR_confluent_cloud_api_secret \
             TF_VAR_kafka_id \
@@ -147,45 +164,6 @@ jobs:
         working-directory: service-repo/target/terraform
         run: terraform show -no-color tfplan > tfplan.txt
 
-      - name: Export sanitized plan JSON
-        working-directory: service-repo/target/terraform
-        run: |
-          terraform show -json tfplan | jq '{
-            format_version,
-            terraform_version,
-            resource_changes: [
-              .resource_changes[]? | {
-                address,
-                mode,
-                type,
-                name,
-                provider_name,
-                actions: .change.actions,
-                before_sensitive: (.change.before_sensitive // null),
-                after_sensitive: (.change.after_sensitive // null),
-                after_unknown: (.change.after_unknown // null)
-              }
-            ],
-            output_changes: (
-              .output_changes
-              | to_entries
-              | map({
-                  key,
-                  value: {
-                    actions: (.value.actions // []),
-                    sensitive: (.value.sensitive // false)
-                  }
-                })
-            )
-          }' > tfplan.sanitized.json
-
-      - name: Terraform apply on develop
-        if: github.event_name == 'push' && github.ref_name == 'develop'
-        working-directory: service-repo/target/terraform
-        run: |
-          unset TF_WORKSPACE
-          terraform apply -auto-approve tfplan
-
       - name: Remove raw Terraform plan
         if: always()
         working-directory: service-repo/target/terraform
@@ -193,30 +171,10 @@ jobs:
 
       - name: Upload generated Terraform
         if: ${{ inputs.upload_artifact }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: ${{ inputs.service_repo }}-terraform
+          name: ${{ inputs.service_repo }}-terraform-plan
           path: |
             service-repo/target/terraform
             !service-repo/target/terraform/.terraform/**
-            !service-repo/target/terraform/tfplan
           if-no-files-found: error
-
-      - name: Create Terraform bundle
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
-        run: |
-          cd service-repo
-          zip -r "${{ inputs.service_repo }}-${{ github.ref_name }}-terraform.zip" target/terraform \
-            -x "target/terraform/.terraform/*" \
-               "target/terraform/tfplan"
-
-      - name: Publish release assets
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          prerelease: ${{ startsWith(github.ref_name, 'rc-') || contains(github.ref_name, '-rc.') }}
-          files: |
-            service-repo/${{ inputs.service_repo }}-${{ github.ref_name }}-terraform.zip
-            service-repo/target/terraform/tfplan.txt
-            service-repo/target/terraform/tfplan.sanitized.json

@@ -20,7 +20,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE_REPO_PATH="$(pwd)"
 CURRENT_REPO_NAME="$(basename "$SERVICE_REPO_PATH")"
-PIPELINE_REPO_PATH_DEFAULT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PIPELINE_REPO_PATH_DEFAULT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 if [[ "$CURRENT_REPO_NAME" != *-api ]]; then
   echo "Current directory must be a *-api service repository: $SERVICE_REPO_PATH" >&2
@@ -47,7 +47,11 @@ fi
 
 PIPELINE_TF_WORKSPACE="${SERVICE_REPO_NAME}-${SERVER}"
 PIPELINE_REPO_PATH="${PIPELINE_REPO_PATH:-$PIPELINE_REPO_PATH_DEFAULT}"
-ASYNCAPI_FILE="${ASYNCAPI_FILE:-asyncapi.yml}"
+ASYNCAPI_FILES_DEFAULT="asyncapi.yml"
+if [[ -f "${SERVICE_REPO_PATH}/asyncapi-client.yml" ]]; then
+  ASYNCAPI_FILES_DEFAULT="asyncapi.yml,asyncapi-client.yml"
+fi
+ASYNCAPI_FILES="${ASYNCAPI_FILES:-$ASYNCAPI_FILES_DEFAULT}"
 APPLY_MODE="${APPLY_MODE:-false}"
 export TF_IN_AUTOMATION="${TF_IN_AUTOMATION:-true}"
 export TF_INPUT="${TF_INPUT:-false}"
@@ -70,16 +74,17 @@ if [[ ! -d "$PIPELINE_REPO_PATH" ]]; then
   exit 1
 fi
 
-chmod +x "${PIPELINE_REPO_PATH}/scripts/provision-kafka.sh"
-chmod +x "${PIPELINE_REPO_PATH}/scripts/assert-terraform-env.sh"
+chmod +x "${PIPELINE_REPO_PATH}/scripts/terraform/provision-kafka.sh"
+chmod +x "${PIPELINE_REPO_PATH}/scripts/terraform/assert-terraform-env.sh"
 
-"${PIPELINE_REPO_PATH}/scripts/provision-kafka.sh" \
+"${PIPELINE_REPO_PATH}/scripts/terraform/provision-kafka.sh" \
   "$SERVICE_REPO_PATH" \
   "$PIPELINE_REPO_PATH" \
-  "$ASYNCAPI_FILE" \
-  "$SERVER"
+  "$ASYNCAPI_FILES" \
+  "$SERVER" \
+  "$SERVICE_REPO_NAME"
 
-"${PIPELINE_REPO_PATH}/scripts/assert-terraform-env.sh" \
+"${PIPELINE_REPO_PATH}/scripts/terraform/assert-terraform-env.sh" \
   TF_CLOUD_ORGANIZATION \
   TF_TOKEN_app_terraform_io \
   PIPELINE_TF_WORKSPACE \

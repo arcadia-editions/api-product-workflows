@@ -6,38 +6,38 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 
 root="${1:-.}"
-artifact="${2:-}"
+record="${2:-}"
 release_version="${3:-}"
-development_version="${4:-}"
+next_version="${4:-}"
 default_branch="${5:-main}"
+artifact_id="$(jq -r .artifactId <<< "$record")"
+type="$(jq -r .type <<< "$record")"
+path="$(jq -r .path <<< "$record")"
 
-arcadia_assert_artifact "$artifact"
+arcadia_assert_type "$type"
+arcadia_assert_safe_relative_path "$path"
 arcadia_assert_release_version "$release_version"
-arcadia_assert_snapshot_version "$development_version"
+arcadia_assert_snapshot_version "$next_version"
+[[ "$artifact_id" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || arcadia_die "unsafe artifactId: $artifact_id"
 
 ruby -e '
   require "rubygems"
-  release_version, development_version = ARGV
+  release_version, next_version = ARGV
   release = Gem::Version.new(release_version)
-  development = Gem::Version.new(development_version.sub(/-SNAPSHOT\z/, ""))
-  abort("development version must be greater than release version") unless development > release
-' "$release_version" "$development_version"
+  following = Gem::Version.new(next_version.sub(/-SNAPSHOT\z/, ""))
+  abort("nextVersion must be greater than version") unless following > release
+' "$release_version" "$next_version"
 
 [[ "${GITHUB_REF_NAME:-$default_branch}" == "$default_branch" ]] || arcadia_die "release must run from $default_branch"
-current="$(arcadia_read_version "$root" "$artifact")"
-arcadia_assert_snapshot_version "$current"
-current_base="${current%-SNAPSHOT}"
-[[ "$current_base" == "$release_version" ]] || arcadia_die "current version $current is not compatible with requested release $release_version"
+current="$(arcadia_read_version "$type" "$root/$path")"
+arcadia_assert_semver "$current"
 
-tag="$artifact/v$release_version"
-branch="release/$artifact/$release_version"
-git -C "$root" rev-parse -q --verify "refs/tags/$tag" >/dev/null && arcadia_die "tag already exists: $tag"
-git -C "$root" ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1 && arcadia_die "release branch already exists: $branch"
-if command -v gh >/dev/null 2>&1 && gh release view "$tag" --repo "${GITHUB_REPOSITORY:-}" >/dev/null 2>&1; then
-  arcadia_die "GitHub Release already exists: $tag"
+release_ref="release/$artifact_id/v$release_version"
+git -C "$root" show-ref --verify --quiet "refs/tags/$release_ref" && arcadia_die "tag already exists: $release_ref"
+git -C "$root" ls-remote --exit-code --heads origin "$release_ref" >/dev/null 2>&1 && arcadia_die "release branch already exists: $release_ref"
+if command -v gh >/dev/null 2>&1 && gh release view "$release_ref" --repo "${GITHUB_REPOSITORY:-}" >/dev/null 2>&1; then
+  arcadia_die "GitHub release already exists: $release_ref"
 fi
 
-arcadia_write_output tag "$tag"
-arcadia_write_output branch "$branch"
+arcadia_write_output ref "$release_ref"
 arcadia_write_output current_version "$current"
-

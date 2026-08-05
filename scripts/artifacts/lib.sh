@@ -2,11 +2,12 @@
 
 set -o pipefail
 
-readonly ARCADIA_ARTIFACT_TYPES=(zdl openapi asyncapi api-product)
-readonly ARCADIA_MANIFEST_CORE_VERSION="0.9.0"
+readonly ARCADIA_ARTIFACT_TYPES=(zdl zfl openapi asyncapi asyncapi-client)
+readonly ARCADIA_ARTIFACTS_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ARCADIA_SPECTRAL_CLI_VERSION="6.15.0"
+readonly ARCADIA_ASYNCAPI_CLI_VERSION="3.4.0"
+readonly ARCADIA_REDOCLY_CLI_VERSION="1.34.5"
 readonly ARCADIA_APICURIO_PLUGIN_VERSION="3.2.2"
-readonly ARCADIA_MAVEN_INSTALL_PLUGIN_VERSION="3.1.4"
 readonly ARCADIA_MAVEN_DEPLOY_PLUGIN_VERSION="3.1.4"
 
 arcadia_die() {
@@ -18,10 +19,18 @@ arcadia_require_command() {
   command -v "$1" >/dev/null 2>&1 || arcadia_die "required command not found: $1"
 }
 
-arcadia_assert_artifact() {
+arcadia_find() {
+  if [[ -x /usr/bin/find ]]; then
+    /usr/bin/find "$@"
+  else
+    find "$@"
+  fi
+}
+
+arcadia_assert_type() {
   case "${1:-}" in
-    zdl|openapi|asyncapi|api-product) ;;
-    *) arcadia_die "unsupported release family: ${1:-<empty>}" ;;
+    zdl|zfl|openapi|asyncapi|asyncapi-client) ;;
+    *) arcadia_die "unsupported artifact type: ${1:-<empty>}" ;;
   esac
 }
 
@@ -38,7 +47,7 @@ arcadia_assert_release_version() {
 
 arcadia_assert_snapshot_version() {
   arcadia_assert_semver "$1"
-  [[ "$1" == *-SNAPSHOT ]] || arcadia_die "development version must end in -SNAPSHOT: $1"
+  [[ "$1" == *-SNAPSHOT ]] || arcadia_die "nextVersion must end in -SNAPSHOT: $1"
 }
 
 arcadia_assert_safe_relative_path() {
@@ -56,71 +65,28 @@ arcadia_yaml_info_version() {
   ' "$1"
 }
 
-arcadia_yaml_root_version() {
-  ruby -e '
-    require "yaml"
-    value = YAML.safe_load_file(ARGV.fetch(0), aliases: false)["version"]
-    abort("missing version in #{ARGV[0]}") if value.nil? || value.to_s.empty?
-    puts value
-  ' "$1"
-}
-
 arcadia_read_version() {
-  local root="$1" artifact="$2"
-  arcadia_assert_artifact "$artifact"
-  case "$artifact" in
-    zdl)
-      [[ -s "$root/.arcadia/versions/zdl.version" ]] || arcadia_die "missing .arcadia/versions/zdl.version"
-      tr -d '[:space:]' < "$root/.arcadia/versions/zdl.version"
+  local type="$1" file="$2"
+  arcadia_assert_type "$type"
+  case "$type" in
+    zdl|zfl)
+      arcadia_require_command jbang
+      jbang --quiet "$ARCADIA_ARTIFACTS_SCRIPT_DIR/DslTool.java" read-version "$type" "$file" | tr -d '\r'
       ;;
-    openapi) arcadia_yaml_info_version "$root/openapi.yml" ;;
-    asyncapi) arcadia_yaml_info_version "$root/asyncapi.yml" ;;
-    api-product) arcadia_yaml_root_version "$root/.arcadia/api-product.yml" ;;
-  esac
-}
-
-arcadia_package_units() {
-  case "$1" in
-    asyncapi) printf '%s\n' asyncapi asyncapi-client ;;
-    api-product) printf '%s\n' service ;;
-    *) printf '%s\n' "$1" ;;
+    openapi|asyncapi|asyncapi-client) arcadia_yaml_info_version "$file" ;;
   esac
 }
 
 arcadia_source_files() {
-  local root="$1" artifact="$2"
-  arcadia_assert_artifact "$artifact"
-  case "$artifact" in
-    zdl)
-      printf '%s\n' domain-model.zdl
-      ;;
-    openapi)
-      printf '%s\n' openapi.yml
-      ;;
-    asyncapi)
-      printf '%s\n' asyncapi.yml
-      git -C "$root" ls-files -- 'asyncapi-client.yml' '*.avsc' '**/*.avsc'
-      ;;
-    api-product)
-      printf '%s\n' .arcadia/api-product.yml .arcadia/versions/zdl.version domain-model.zdl openapi.yml asyncapi.yml
-      git -C "$root" ls-files -- 'asyncapi-client.yml' '*.avsc' '**/*.avsc' 'README.md' 'SUMMARY.md' 'CHANGELOG.md'
-      ;;
-  esac | awk 'NF && !seen[$0]++'
+  local root="$1" type="$2" path="$3"
+  printf '%s\n' "$path"
+  if [[ "$type" == "asyncapi" ]]; then
+    git -C "$root" ls-files -- '*.avsc' '**/*.avsc'
+  fi
 }
 
-arcadia_package_unit_source_files() {
-  local root="$1" package_unit="$2"
-  case "$package_unit" in
-    zdl) printf '%s\n' domain-model.zdl ;;
-    openapi) printf '%s\n' openapi.yml ;;
-    asyncapi)
-      printf '%s\n' asyncapi.yml
-      git -C "$root" ls-files -- '*.avsc' '**/*.avsc'
-      ;;
-    asyncapi-client) printf '%s\n' asyncapi-client.yml ;;
-    service) arcadia_source_files "$root" api-product ;;
-    *) arcadia_die "unsupported package unit: $package_unit" ;;
-  esac | awk 'NF && !seen[$0]++'
+arcadia_publish_to_apicurio() {
+  case "$1" in openapi|asyncapi|asyncapi-client) return 0 ;; *) return 1 ;; esac
 }
 
 arcadia_write_output() {

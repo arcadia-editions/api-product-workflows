@@ -6,51 +6,31 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 
 root="${1:-.}"
-artifact="${2:-}"
-version="${3:-}"
-arcadia_assert_artifact "$artifact"
+type="${2:-}"
+relative_path="${3:-}"
+version="${4:-}"
+arcadia_assert_type "$type"
+arcadia_assert_safe_relative_path "$relative_path"
 arcadia_assert_semver "$version"
+file="$root/$relative_path"
 
-replace_yaml_version() {
-  local file="$1" section="$2"
-  ruby - "$file" "$section" "$version" <<'RUBY'
-file, section, version = ARGV
+replace_yaml_info_version() {
+  ruby - "$file" "$version" <<'RUBY'
+file, version = ARGV
 lines = File.readlines(file, chomp: true)
-in_section = section == "root"
-section_indent = nil
-changed = false
-lines.map! do |line|
-  if section != "root" && line.match?(/^#{Regexp.escape(section)}:\s*$/)
-    in_section = true
-    section_indent = 0
-    next line
-  end
-  if in_section && section != "root" && line.match?(/^\S/) && !line.match?(/^#{Regexp.escape(section)}:/)
-    in_section = false
-  end
-  pattern = section == "root" ? /^version:\s*.*$/ : /^  version:\s*.*$/
-  if in_section && !changed && line.match?(pattern)
-    changed = true
-    section == "root" ? "version: \"#{version}\"" : "  version: \"#{version}\""
-  else
-    line
-  end
-end
-abort("version field not found in #{file}") unless changed
+info = lines.index { |line| line.match?(/^info:\s*$/) }
+abort("info section not found in #{file}") unless info
+finish = ((info + 1)...lines.length).find { |index| lines[index].match?(/^\S/) } || lines.length
+versions = ((info + 1)...finish).select { |index| lines[index].match?(/^  version:\s*/) }
+abort("expected exactly one info.version in #{file}") unless versions.length == 1
+lines[versions.first] = "  version: \"#{version}\""
 File.write(file, lines.join("\n") + "\n")
 RUBY
 }
 
-case "$artifact" in
-  zdl)
-    mkdir -p "$root/.arcadia/versions"
-    printf '%s\n' "$version" > "$root/.arcadia/versions/zdl.version"
-    ;;
-  openapi) replace_yaml_version "$root/openapi.yml" info ;;
-  asyncapi)
-    replace_yaml_version "$root/asyncapi.yml" info
-    [[ ! -f "$root/asyncapi-client.yml" ]] || replace_yaml_version "$root/asyncapi-client.yml" info
-    ;;
-  api-product) replace_yaml_version "$root/.arcadia/api-product.yml" root ;;
+case "$type" in
+  zdl|zfl) jbang --quiet "$SCRIPT_DIR/DslTool.java" write-version "$type" "$file" "$version" ;;
+  openapi|asyncapi|asyncapi-client) replace_yaml_info_version ;;
 esac
 
+[[ "$(arcadia_read_version "$type" "$file")" == "$version" ]] || arcadia_die "version update failed for $relative_path"

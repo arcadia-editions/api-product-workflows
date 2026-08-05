@@ -1,0 +1,211 @@
+name: Release combined Kafka provisioning bundle
+
+on:
+  workflow_call:
+    inputs:
+      service_repo:
+        description: Repository name inside the arcadia-editions org.
+        required: true
+        type: string
+      asyncapi_version:
+        description: Released version (release/asyncapi/vX tag) to include, if this repo owns an asyncapi artifact.
+        required: false
+        default: ""
+        type: string
+      asyncapi_client_version:
+        description: Released version (release/asyncapi-client/vX tag) to include, if this repo owns an asyncapi-client artifact.
+        required: false
+        default: ""
+        type: string
+      kafka_version:
+        description: Version for this combined Kafka provisioning bundle, independent of the source artifact versions.
+        required: true
+        type: string
+      pipeline_ref:
+        description: Git ref to use when checking out the shared pipeline repository.
+        required: false
+        default: main
+        type: string
+      architecture_manifest_uri:
+        required: false
+        default: https://raw.githubusercontent.com/arcadia-editions/arcadia-editions-architecture/main/zenwave-architecture.yml
+        type: string
+      avro_imports:
+        description: Comma-separated Avro schema files or folders, relative to the primary source repository root, loaded before owned schemas are bundled.
+        required: false
+        default: ""
+        type: string
+      java_distribution:
+        required: false
+        default: temurin
+        type: string
+      java_version:
+        required: false
+        default: "21"
+        type: string
+    secrets:
+      checkout_token:
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build combined Terraform bundle
+    runs-on: ubuntu-latest
+    env:
+      AVRO_IMPORTS: ${{ inputs.avro_imports }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout shared pipeline repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: arcadia-editions/api-product-workflows
+          ref: ${{ inputs.pipeline_ref }}
+          token: ${{ secrets.checkout_token || github.token }}
+          path: pipeline-repo
+
+      - name: Set up Java
+        uses: actions/setup-java@d7793b545071e98d581d3bf084a51c3213318a07 # v4
+        with:
+          distribution: ${{ inputs.java_distribution }}
+          java-version: ${{ inputs.java_version }}
+
+      - name: Set up JBang
+        uses: jbangdev/setup-jbang@cc28889678db839e29433f42f9ff25f148b6d8de # main
+        with:
+          version: 0.138.0
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+
+      - name: Reject an already-released kafka_version
+        shell: bash
+        run: |
+          tag="release/kafka/v${{ inputs.kafka_version }}"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "GitHub release already exists: $tag" >&2
+            exit 1
+          fi
+
+      - name: Resolve Kafka artifacts from the architecture manifest
+        id: resolve
+        shell: bash
+        env:
+          MANIFEST_URI: ${{ inputs.architecture_manifest_uri }}
+        run: |
+          repository="${{ inputs.service_repo }}"
+          inventory="$(jbang --quiet ./pipeline-repo/scripts/artifacts/ManifestTool.java list "$MANIFEST_URI" "$repository")"
+
+          asyncapi_record="$(jq -c '[.[] | select(.type == "asyncapi")] | .[0] // empty' <<< "$inventory")"
+          client_record="$(jq -c '[.[] | select(.type == "asyncapi-client")] | .[0] // empty' <<< "$inventory")"
+
+          if [[ -z "$asyncapi_record" && -z "$client_record" ]]; then
+            echo "no asyncapi or asyncapi-client artifact declared for $repository" >&2
+            exit 1
+          fi
+
+          if [[ -n "$asyncapi_record" ]]; then
+            echo "has_asyncapi=true" >> "$GITHUB_OUTPUT"
+            echo "asyncapi_artifact_id=$(jq -r .artifactId <<< "$asyncapi_record")" >> "$GITHUB_OUTPUT"
+            echo "asyncapi_path=$(jq -r .path <<< "$asyncapi_record")" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_asyncapi=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [[ -n "$client_record" ]]; then
+            echo "has_client=true" >> "$GITHUB_OUTPUT"
+            echo "client_artifact_id=$(jq -r .artifactId <<< "$client_record")" >> "$GITHUB_OUTPUT"
+            echo "client_path=$(jq -r .path <<< "$client_record")" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_client=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Require an explicit version for every declared artifact
+        shell: bash
+        run: |
+          if [[ "${{ steps.resolve.outputs.has_asyncapi }}" == "true" && -z "${{ inputs.asyncapi_version }}" ]]; then
+            echo "this repository owns an asyncapi artifact; asyncapi_version is required" >&2
+            exit 1
+          fi
+          if [[ "${{ steps.resolve.outputs.has_client }}" == "true" && -z "${{ inputs.asyncapi_client_version }}" ]]; then
+            echo "this repository owns an asyncapi-client artifact; asyncapi_client_version is required" >&2
+            exit 1
+          fi
+
+      - name: Checkout released asyncapi
+        if: steps.resolve.outputs.has_asyncapi == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: arcadia-editions/${{ inputs.service_repo }}
+          ref: refs/tags/release/${{ steps.resolve.outputs.asyncapi_artifact_id }}/v${{ inputs.asyncapi_version }}
+          path: service-repo-asyncapi
+
+      - name: Checkout released asyncapi-client
+        if: steps.resolve.outputs.has_client == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: arcadia-editions/${{ inputs.service_repo }}
+          ref: refs/tags/release/${{ steps.resolve.outputs.client_artifact_id }}/v${{ inputs.asyncapi_client_version }}
+          path: service-repo-client
+
+      - name: Prepare generator inputs
+        id: prepare
+        shell: bash
+        run: |
+          if [[ "${{ steps.resolve.outputs.has_asyncapi }}" == "true" ]]; then
+            primary_root="$(pwd)/service-repo-asyncapi"
+            asyncapi_files="${{ steps.resolve.outputs.asyncapi_path }}"
+            if [[ "${{ steps.resolve.outputs.has_client }}" == "true" ]]; then
+              asyncapi_files="${asyncapi_files},$(pwd)/service-repo-client/${{ steps.resolve.outputs.client_path }}"
+            fi
+          else
+            primary_root="$(pwd)/service-repo-client"
+            asyncapi_files="${{ steps.resolve.outputs.client_path }}"
+          fi
+          echo "primary_root=$primary_root" >> "$GITHUB_OUTPUT"
+          echo "asyncapi_files=$asyncapi_files" >> "$GITHUB_OUTPUT"
+
+      - name: Generate combined Terraform from AsyncAPI
+        shell: bash
+        run: |
+          chmod +x ./pipeline-repo/scripts/terraform/provision-kafka.sh
+          ./pipeline-repo/scripts/terraform/provision-kafka.sh \
+            "${{ steps.prepare.outputs.primary_root }}" \
+            ./pipeline-repo \
+            "${{ steps.prepare.outputs.asyncapi_files }}" \
+            prod \
+            "${{ inputs.service_repo }}"
+
+      - name: Sanity-check generated Terraform offline
+        working-directory: ${{ steps.prepare.outputs.primary_root }}/target/terraform
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+      - name: Record bundle provenance
+        shell: bash
+        run: |
+          jq -n \
+            --arg kafka_version "${{ inputs.kafka_version }}" \
+            --arg asyncapi_version "${{ inputs.asyncapi_version }}" \
+            --arg asyncapi_client_version "${{ inputs.asyncapi_client_version }}" \
+            '{kafka_version: $kafka_version, asyncapi_version: ($asyncapi_version | select(length > 0)), asyncapi_client_version: ($asyncapi_client_version | select(length > 0))}' \
+            > "${{ steps.prepare.outputs.primary_root }}/target/terraform/RELEASE.json"
+
+      - name: Create Terraform bundle
+        shell: bash
+        run: |
+          cd "${{ steps.prepare.outputs.primary_root }}"
+          zip -r "${{ inputs.service_repo }}-kafka-v${{ inputs.kafka_version }}-terraform.zip" target/terraform \
+            -x "target/terraform/.terraform/*"
+
+      - name: Publish combined Kafka release
+        shell: bash
+        run: |
+          tag="release/kafka/v${{ inputs.kafka_version }}"
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
+            --title "kafka v${{ inputs.kafka_version }}" \
+            --notes "Combined Kafka provisioning bundle. asyncapi=${{ inputs.asyncapi_version || 'n/a' }}, asyncapi-client=${{ inputs.asyncapi_client_version || 'n/a' }}." \
+            "${{ steps.prepare.outputs.primary_root }}/${{ inputs.service_repo }}-kafka-v${{ inputs.kafka_version }}-terraform.zip"

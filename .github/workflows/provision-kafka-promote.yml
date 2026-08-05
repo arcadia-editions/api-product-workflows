@@ -1,0 +1,188 @@
+name: Promote Kafka provisioning bundle
+
+on:
+  workflow_call:
+    inputs:
+      service_repo:
+        description: Repository name inside the arcadia-editions org.
+        required: true
+        type: string
+      target_env:
+        description: Target environment. One of pre or prod.
+        required: true
+        type: string
+      kafka_release:
+        description: >
+          Version of the release/kafka/vX bundle to promote. Required for target_env=pre,
+          where a human deliberately picks a build. Must be left empty for target_env=prod,
+          which always mirrors whatever kafka_release is currently applied to pre - it is
+          never chosen independently, so pre and prod cannot diverge.
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    name: Apply combined Terraform bundle
+    runs-on: ubuntu-latest
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+      TF_CLOUD_ORGANIZATION: ${{ vars.TF_CLOUD_ORGANIZATION }}
+      TF_TOKEN_app_terraform_io: ${{ secrets.TF_TOKEN_app_terraform_io }}
+      TF_VAR_confluent_cloud_api_key: ${{ secrets.CONFLUENT_CLOUD_API_KEY }}
+      TF_VAR_confluent_cloud_api_secret: ${{ secrets.CONFLUENT_CLOUD_API_SECRET }}
+      TF_VAR_kafka_id: ${{ vars.CONFLUENT_KAFKA_CLUSTER_ID }}
+      TF_VAR_kafka_rest_endpoint: ${{ vars.CONFLUENT_KAFKA_REST_ENDPOINT }}
+      TF_VAR_kafka_api_key: ${{ secrets.CONFLUENT_KAFKA_API_KEY }}
+      TF_VAR_kafka_api_secret: ${{ secrets.CONFLUENT_KAFKA_API_SECRET }}
+      TF_VAR_schema_registry_id: ${{ vars.CONFLUENT_SCHEMA_REGISTRY_ID }}
+      TF_VAR_schema_registry_crn: ${{ vars.CONFLUENT_SCHEMA_REGISTRY_CRN }}
+      TF_VAR_schema_registry_rest_endpoint: ${{ vars.CONFLUENT_SCHEMA_REGISTRY_REST_ENDPOINT }}
+      TF_VAR_schema_registry_api_key: ${{ secrets.CONFLUENT_SCHEMA_REGISTRY_API_KEY }}
+      TF_VAR_schema_registry_api_secret: ${{ secrets.CONFLUENT_SCHEMA_REGISTRY_API_SECRET }}
+      GH_TOKEN: ${{ github.token }}
+      SERVICE_REPO: ${{ inputs.service_repo }}
+      TARGET_ENV: ${{ inputs.target_env }}
+      KAFKA_RELEASE_INPUT: ${{ inputs.kafka_release }}
+    steps:
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+
+      - name: Validate target_env
+        shell: bash
+        run: |
+          case "$TARGET_ENV" in
+            pre|prod) ;;
+            *) echo "target_env must be pre or prod, got: $TARGET_ENV" >&2; exit 1 ;;
+          esac
+
+      - name: Resolve kafka_release to promote
+        id: resolve
+        shell: bash
+        run: |
+          if [[ "$TARGET_ENV" == "pre" ]]; then
+            [[ -n "$KAFKA_RELEASE_INPUT" ]] || { echo "kafka_release is required when target_env=pre" >&2; exit 1; }
+            echo "kafka_version=$KAFKA_RELEASE_INPUT" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # prod never accepts an explicit version: it always mirrors whichever
+          # kafka_release is currently applied to pre, read back from that
+          # workspace's own provisioned_from output, so prod cannot diverge from
+          # what pre was actually validated with.
+          [[ -z "$KAFKA_RELEASE_INPUT" ]] || { echo "kafka_release must be empty for target_env=prod; promote pre first, then promote prod" >&2; exit 1; }
+
+          mkdir -p read-pre-state
+          {
+            printf 'terraform {\n'
+            printf '  cloud {\n'
+            printf '    organization = "%s"\n' "${TF_CLOUD_ORGANIZATION}"
+            printf '    workspaces {\n'
+            printf '      name = "%s-pre"\n' "${SERVICE_REPO}"
+            printf '    }\n'
+            printf '  }\n'
+            printf '}\n'
+          } > read-pre-state/main.tf
+          (
+            cd read-pre-state
+            unset TF_WORKSPACE
+            terraform init
+            provisioned_from="$(terraform output -raw provisioned_from 2>/dev/null || true)"
+            [[ -n "$provisioned_from" ]] || { echo "the ${SERVICE_REPO}-pre workspace has no provisioned_from output yet; promote to pre before promoting to prod" >&2; exit 1; }
+            echo "kafka_version=$provisioned_from" >> "$GITHUB_OUTPUT"
+          )
+
+      - name: Download combined Kafka release bundle
+        shell: bash
+        env:
+          KAFKA_VERSION: ${{ steps.resolve.outputs.kafka_version }}
+        run: |
+          tag="release/kafka/v${KAFKA_VERSION}"
+          mkdir -p downloaded
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern '*-terraform.zip' --dir downloaded
+          mkdir -p bundle
+          unzip -o downloaded/*-terraform.zip -d bundle >/dev/null
+          test -d bundle/target/terraform || { echo "downloaded bundle does not contain target/terraform" >&2; exit 1; }
+
+      - name: Render cloud.tf for the target workspace
+        shell: bash
+        run: |
+          test -f bundle/target/terraform/cloud.tftpl || { echo "downloaded bundle is missing cloud.tftpl; it was not built for promotion" >&2; exit 1; }
+          sed \
+            -e "s|__TF_CLOUD_ORGANIZATION__|${TF_CLOUD_ORGANIZATION}|g" \
+            -e "s|__TF_WORKSPACE__|${SERVICE_REPO}-${TARGET_ENV}|g" \
+            bundle/target/terraform/cloud.tftpl > bundle/target/terraform/cloud.tf
+          rm -f bundle/target/terraform/cloud.tftpl
+
+      - name: Check Terraform inputs
+        shell: bash
+        env:
+          PIPELINE_TF_WORKSPACE: ${{ format('{0}-{1}', inputs.service_repo, inputs.target_env) }}
+        run: |
+          for name in TF_VAR_confluent_cloud_api_key TF_VAR_confluent_cloud_api_secret TF_VAR_kafka_id \
+            TF_VAR_kafka_rest_endpoint TF_VAR_kafka_api_key TF_VAR_kafka_api_secret TF_VAR_schema_registry_id \
+            TF_VAR_schema_registry_crn TF_VAR_schema_registry_rest_endpoint TF_VAR_schema_registry_api_key \
+            TF_VAR_schema_registry_api_secret TF_CLOUD_ORGANIZATION TF_TOKEN_app_terraform_io PIPELINE_TF_WORKSPACE; do
+            [[ -n "${!name:-}" ]] || { echo "Missing required environment variable: $name" >&2; exit 1; }
+          done
+
+      - name: Terraform init
+        working-directory: bundle/target/terraform
+        run: |
+          unset TF_WORKSPACE
+          terraform init
+
+      - name: Report currently-applied version before promoting
+        working-directory: bundle/target/terraform
+        run: |
+          current="$(terraform output -raw provisioned_from 2>/dev/null || echo '(none yet)')"
+          echo "### Promoting ${SERVICE_REPO} to ${TARGET_ENV}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- currently applied: \`$current\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- promoting to: \`${{ steps.resolve.outputs.kafka_version }}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Terraform validate
+        working-directory: bundle/target/terraform
+        run: |
+          unset TF_WORKSPACE
+          terraform validate
+
+      - name: Terraform plan
+        working-directory: bundle/target/terraform
+        env:
+          TF_VAR_provisioned_from: ${{ steps.resolve.outputs.kafka_version }}
+        run: |
+          unset TF_WORKSPACE
+          terraform plan -out=tfplan
+
+      - name: Export plan text
+        working-directory: bundle/target/terraform
+        run: terraform show -no-color tfplan > tfplan.txt
+
+      # No separate reviewer gate: this workflow only runs via manual
+      # workflow_dispatch with an explicit kafka_release (pre) or an
+      # explicit mirrored version (prod) - the person running it is the gate.
+      - name: Terraform apply
+        working-directory: bundle/target/terraform
+        env:
+          TF_VAR_provisioned_from: ${{ steps.resolve.outputs.kafka_version }}
+        run: |
+          unset TF_WORKSPACE
+          terraform apply -auto-approve tfplan
+
+      - name: Remove raw Terraform plan
+        if: always()
+        working-directory: bundle/target/terraform
+        run: rm -f tfplan
+
+      - name: Upload applied Terraform
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ inputs.service_repo }}-terraform-${{ inputs.target_env }}
+          path: |
+            bundle/target/terraform
+            !bundle/target/terraform/.terraform/**
+          if-no-files-found: error

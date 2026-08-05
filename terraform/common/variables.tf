@@ -58,3 +58,9 @@ variable "default_compatibility" {
   description = "Default schema compatibility applied when the generated resources do not override it."
   type        = string
 }
+
+variable "provisioned_from" {
+  description = "Identifier of the source content this apply was generated from: a combined kafka release version (release/kafka/vX) for pre/prod, or a git ref/sha for the continuous develop environment. Read back by promotion to mirror pre into prod without re-typing versions."
+  type        = string
+  default     = ""
+}

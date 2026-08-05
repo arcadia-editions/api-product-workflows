@@ -7,13 +7,13 @@ repository name is inferred from the current directory, and the Terraform worksp
 
 ```bash
 cd ../catalog-products-api
-../api-product-workflows/scripts/provision-kafka-local.sh develop
+../api-product-workflows/scripts/terraform/provision-kafka-local.sh develop
 ```
 
 Optional apply:
 
 ```bash
-APPLY_MODE=true ../api-product-workflows/scripts/provision-kafka-local.sh develop
+APPLY_MODE=true ../api-product-workflows/scripts/terraform/provision-kafka-local.sh develop
 ```
 
 Generated plan artifacts:
@@ -54,7 +54,7 @@ For the example above, `PIPELINE_TF_WORKSPACE` is set to
 The service repository can also be passed explicitly before the environment:
 
 ```bash
-../api-product-workflows/scripts/provision-kafka-local.sh catalog-products-api develop
+../api-product-workflows/scripts/terraform/provision-kafka-local.sh catalog-products-api develop
 ```
 
 The explicit repository name must match the current directory.

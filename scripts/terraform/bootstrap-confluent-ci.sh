@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Bootstrap a fresh Confluent Cloud trial organization for CI-oriented Terraform tests.
+# Bootstrap a Confluent Cloud trial organization for CI-oriented Terraform tests.
 # Run this only after manually creating the Confluent Cloud account/org and running:
 #   confluent login
 # Existing .env.confluent-ci keys are reused by default; use --rotate-keys for new

@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Generate Terraform from one or more service AsyncAPI files (owned and/or
+# client contracts) and the shared pipeline overlays. Multiple generator runs
+# write into the same target folder so a single Terraform apply provisions
+# both owned topics/schemas and consumer ACLs/consumer groups together.
+
 SERVICE_REPO_PATH="${1:?service repo path is required}"
 PIPELINE_REPO_PATH="${2:?pipeline repo path is required}"
-ASYNCAPI_FILE="${3:?asyncapi file path is required}"
+ASYNCAPI_FILES="${3:?comma-separated asyncapi file path(s) is required}"
 SERVER="${4:?server is required}"
+SERVICE_REPO_NAME="${5:-$(basename "$(cd "$SERVICE_REPO_PATH" && pwd)")}"
 AVRO_IMPORTS_VALUE="${AVRO_IMPORTS:-}"
 TF_CLOUD_ORGANIZATION_VALUE="${TF_CLOUD_ORGANIZATION:-}"
 TF_WORKSPACE_VALUE="${PIPELINE_TF_WORKSPACE:-}"
@@ -29,42 +35,64 @@ render_cloud_config() {
     return
   fi
 
-  if [[ -z "$TF_CLOUD_ORGANIZATION_VALUE" ]]; then
-    echo "TF_CLOUD_ORGANIZATION is required to render cloud.tf" >&2
-    exit 1
-  fi
-
-  if [[ -z "$TF_WORKSPACE_VALUE" ]]; then
-    echo "PIPELINE_TF_WORKSPACE is required to render cloud.tf" >&2
-    exit 1
+  # A combined release bundle is built once and later applied to more than one
+  # Terraform workspace (pre, then prod). When the target workspace isn't known
+  # yet, leave cloud.tftpl in place for the promotion step to render instead of
+  # failing here.
+  if [[ -z "$TF_CLOUD_ORGANIZATION_VALUE" || -z "$TF_WORKSPACE_VALUE" ]]; then
+    echo "TF_CLOUD_ORGANIZATION/PIPELINE_TF_WORKSPACE not set; leaving cloud.tftpl unrendered" >&2
+    return
   fi
 
   sed \
     -e "s|__TF_CLOUD_ORGANIZATION__|${TF_CLOUD_ORGANIZATION_VALUE}|g" \
     -e "s|__TF_WORKSPACE__|${TF_WORKSPACE_VALUE}|g" \
     "$template_path" > "$output_path"
+  rm -f "$template_path"
 }
 
 resolved_service_repo_path="$(cd "$SERVICE_REPO_PATH" && pwd)"
 resolved_pipeline_repo_path="$(cd "$PIPELINE_REPO_PATH" && pwd)"
-resolved_asyncapi_file="${resolved_service_repo_path}/${ASYNCAPI_FILE}"
 resolved_target_folder="${resolved_service_repo_path}/target/terraform"
-service_repo_name="$(basename "$resolved_service_repo_path")"
+service_repo_name="$SERVICE_REPO_NAME"
+
+IFS=',' read -r -a asyncapi_file_paths <<< "$ASYNCAPI_FILES"
+if [[ "${#asyncapi_file_paths[@]}" -eq 0 ]]; then
+  echo "At least one AsyncAPI file is required" >&2
+  exit 1
+fi
+
+resolve_asyncapi_file() {
+  local asyncapi_file="$1"
+  if [[ "$asyncapi_file" = /* || "$asyncapi_file" =~ ^[A-Za-z]:[\\/] ]]; then
+    printf '%s' "$asyncapi_file"
+  else
+    printf '%s' "${resolved_service_repo_path}/${asyncapi_file}"
+  fi
+}
+
+resolved_asyncapi_files=()
+for asyncapi_file in "${asyncapi_file_paths[@]}"; do
+  resolved_asyncapi_file="$(resolve_asyncapi_file "$asyncapi_file")"
+  if [[ ! -f "$resolved_asyncapi_file" ]]; then
+    echo "AsyncAPI file not found: $resolved_asyncapi_file" >&2
+    exit 1
+  fi
+  resolved_asyncapi_files+=("$resolved_asyncapi_file")
+done
+
+rm -rf "$resolved_target_folder"
+mkdir -p "$resolved_target_folder"
+
+api_files_joined="$(IFS=','; echo "${resolved_asyncapi_files[*]}")"
+
 generator_args=(
-  "apiFile=$resolved_asyncapi_file"
+  "apiFiles=$api_files_joined"
   "templates=TerraformConfluent"
   "serviceAccountMode=managed"
   "server=$SERVER"
   "targetFolder=$resolved_target_folder"
 )
-
-if [[ ! -f "$resolved_asyncapi_file" ]]; then
-  echo "AsyncAPI file not found: $resolved_asyncapi_file" >&2
-  exit 1
-fi
-
-rm -rf "$resolved_target_folder"
-mkdir -p "$resolved_target_folder"
 
 if [[ -n "$AVRO_IMPORTS_VALUE" ]]; then
   IFS=',' read -r -a avro_import_paths <<< "$AVRO_IMPORTS_VALUE"
@@ -89,6 +117,5 @@ copy_overlay_folder "${resolved_pipeline_repo_path}/terraform/services/${service
 render_cloud_config \
   "${resolved_target_folder}/cloud.tftpl" \
   "${resolved_target_folder}/cloud.tf"
-rm -f "${resolved_target_folder}/cloud.tftpl"
 
-echo "Terraform generated in $resolved_target_folder"
+echo "Terraform generated in $resolved_target_folder from ${#asyncapi_file_paths[@]} AsyncAPI file(s)"

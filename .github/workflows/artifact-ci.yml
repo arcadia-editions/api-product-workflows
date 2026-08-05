@@ -1,4 +1,4 @@
-name: Artifact CI
+name: Artifact validation
 
 on:
   workflow_call:
@@ -7,21 +7,9 @@ on:
         description: Immutable api-product-workflows commit SHA or release tag.
         required: true
         type: string
-      service_repository:
-        description: API-product repository name.
-        required: true
-        type: string
-      architecture_repository:
+      architecture_manifest_uri:
         required: false
-        default: arcadia-editions/arcadia-editions-architecture
-        type: string
-      architecture_ref:
-        required: false
-        default: main
-        type: string
-      architecture_manifest_path:
-        required: false
-        default: zenwave-architecture.yml
+        default: https://raw.githubusercontent.com/arcadia-editions/arcadia-editions-architecture/main/zenwave-architecture.yml
         type: string
       base_sha:
         required: false
@@ -40,38 +28,25 @@ on:
         required: false
     outputs:
       plan:
-        description: Complete trusted validation plan.
-        value: ${{ jobs.ci.outputs.plan }}
-      publication_plan:
-        description: Trusted plan containing source-changing families only.
-        value: ${{ jobs.ci.outputs.publication_plan }}
-      packages:
-        description: JSON package inventory.
-        value: ${{ jobs.ci.outputs.packages }}
+        description: Manifest artifacts affected by this change.
+        value: ${{ jobs.validate.outputs.plan }}
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
+  group: artifact-validation-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  ci:
+  validate:
     runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    env:
-      INPUT_SERVICE_REPOSITORY: ${{ inputs.service_repository }}
-      INPUT_ARCHITECTURE_MANIFEST_PATH: ${{ inputs.architecture_manifest_path }}
-      INPUT_FULL_VALIDATION: ${{ inputs.full_validation }}
     outputs:
       plan: ${{ steps.detect.outputs.plan }}
-      publication_plan: ${{ steps.detect.outputs.publication_plan }}
-      packages: ${{ steps.execute.outputs.packages }}
+      has_kafka_artifacts: ${{ steps.kafka-detect.outputs.has_kafka_artifacts }}
     steps:
       - name: Check out caller commit
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           path: source
           ref: ${{ inputs.head_sha || github.sha }}
@@ -79,7 +54,7 @@ jobs:
           persist-credentials: false
 
       - name: Check out trusted workflow implementation
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: arcadia-editions/api-product-workflows
           ref: ${{ inputs.workflow_ref }}
@@ -87,61 +62,81 @@ jobs:
           path: pipeline
           persist-credentials: false
 
-      - name: Check out architecture manifest
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          repository: ${{ inputs.architecture_repository }}
-          ref: ${{ inputs.architecture_ref }}
-          token: ${{ secrets.checkout_token || github.token }}
-          path: architecture
-          persist-credentials: false
-
-      - name: Set up pinned JDK
-        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9
+      - name: Set up Java
+        uses: actions/setup-java@d7793b545071e98d581d3bf084a51c3213318a07 # v4
         with:
           distribution: temurin
           java-version: "21"
 
-      - name: Set up pinned JBang
+      - name: Set up JBang
+        uses: jbangdev/setup-jbang@cc28889678db839e29433f42f9ff25f148b6d8de # main
+        with:
+          version: 0.138.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22.17.0"
+          cache: npm
+          cache-dependency-path: pipeline/spectral/package-lock.json
+
+      - name: Set up validation tools
         shell: bash
         run: |
-          chmod +x pipeline/scripts/artifacts/setup-jbang.sh
-          pipeline/scripts/artifacts/setup-jbang.sh 0.138.0
+          chmod +x pipeline/scripts/artifacts/*.sh
+          npm ci --prefix pipeline/spectral
+          npm run --prefix pipeline/spectral bundle
 
-      - name: Build pinned Spectral bundle
-        working-directory: pipeline/spectral
-        shell: bash
-        run: |
-          npm ci
-          npm run bundle
-
-      - name: Detect affected artifact families
+      - name: Detect changed manifest artifacts
         id: detect
         shell: bash
         env:
+          MANIFEST_URI: ${{ inputs.architecture_manifest_uri }}
           BASE_SHA: ${{ inputs.base_sha || github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ inputs.head_sha || github.sha }}
+          FULL_VALIDATION: ${{ inputs.full_validation }}
         run: |
-          chmod +x pipeline/scripts/artifacts/*.sh
-          pipeline/scripts/artifacts/detect-changes.sh source "$BASE_SHA" "$HEAD_SHA" "$INPUT_FULL_VALIDATION"
+          repository="${GITHUB_REPOSITORY#*/}"
+          pipeline/scripts/artifacts/detect-changes.sh \
+            source "$MANIFEST_URI" "$repository" "$BASE_SHA" "$HEAD_SHA" "$FULL_VALIDATION"
 
-      - name: Validate and package trusted plan
-        id: execute
+      - name: Lint and validate changed artifacts
         env:
           PLAN_JSON: ${{ steps.detect.outputs.plan }}
         shell: bash
         run: |
           pipeline/scripts/artifacts/execute-plan.sh \
-            ci "$PLAN_JSON" source pipeline \
-            "architecture/$INPUT_ARCHITECTURE_MANIFEST_PATH" \
-            "$INPUT_SERVICE_REPOSITORY" \
-            pipeline/config/maven-settings.xml \
-            source/target/artifacts
+            ci "$PLAN_JSON" source pipeline pipeline/config/maven-settings.xml source/target/artifacts
 
-      - name: Upload CI packages and proposed repository trees
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
-        with:
-          name: artifact-ci-${{ github.sha }}
-          path: source/target/artifacts
-          if-no-files-found: error
-          retention-days: 7
+      - name: Detect Kafka-relevant artifacts
+        id: kafka-detect
+        shell: bash
+        env:
+          MANIFEST_URI: ${{ inputs.architecture_manifest_uri }}
+        run: |
+          repository="${GITHUB_REPOSITORY#*/}"
+          inventory="$(jbang --quiet pipeline/scripts/artifacts/ManifestTool.java list "$MANIFEST_URI" "$repository")"
+          has_kafka="$(jq -r '[.[] | select(.type == "asyncapi" or .type == "asyncapi-client")] | length > 0' <<< "$inventory")"
+          echo "has_kafka_artifacts=$has_kafka" >> "$GITHUB_OUTPUT"
+
+  kafka-plan:
+    name: Provision Kafka (plan)
+    needs: validate
+    if: needs.validate.outputs.has_kafka_artifacts == 'true'
+    uses: ./.github/workflows/provision-kafka-plan.yml
+    with:
+      service_repo: ${{ github.event.repository.name }}
+      pipeline_ref: ${{ inputs.workflow_ref }}
+      architecture_manifest_uri: ${{ inputs.architecture_manifest_uri }}
+    secrets: inherit
+
+  kafka-develop:
+    name: Provision Kafka (develop)
+    needs: kafka-plan
+    if: needs.validate.outputs.has_kafka_artifacts == 'true' && github.ref_name == 'develop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    uses: ./.github/workflows/provision-kafka-develop.yml
+    with:
+      service_repo: ${{ github.event.repository.name }}
+      pipeline_ref: ${{ inputs.workflow_ref }}
+      architecture_manifest_uri: ${{ inputs.architecture_manifest_uri }}
+    secrets: inherit
