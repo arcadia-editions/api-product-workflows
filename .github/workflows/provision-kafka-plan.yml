@@ -96,6 +96,11 @@ jobs:
         with:
           version: 0.138.0
 
+      - name: Install ZenWave CLI alias
+        uses: ./pipeline-repo/.github/actions/install-zenwave-alias
+        with:
+          alias: ${{ vars.ZENWAVE_ALIAS || 'release@zenwave360/zenwave-sdk' }}
+
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
 

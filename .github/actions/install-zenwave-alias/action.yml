@@ -1,0 +1,26 @@
+name: Install ZenWave CLI alias
+description: Registers the 'zw' JBang alias for the ZenWave SDK CLI, pinned to a release/snapshots/next channel.
+
+inputs:
+  alias:
+    description: ZenWave JBang catalog alias to install.
+    required: false
+    default: release@zenwave360/zenwave-sdk
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        ZENWAVE_ALIAS: ${{ inputs.alias }}
+      run: |
+        case "$ZENWAVE_ALIAS" in
+          release@zenwave360/zenwave-sdk|snapshots@zenwave360/zenwave-sdk|next@zenwave360/zenwave-sdk)
+            ;;
+          *)
+            echo "Unsupported ZENWAVE_ALIAS: $ZENWAVE_ALIAS" >&2
+            echo "Allowed values: release@zenwave360/zenwave-sdk, snapshots@zenwave360/zenwave-sdk, next@zenwave360/zenwave-sdk" >&2
+            exit 2
+            ;;
+        esac
+        jbang alias add --fresh --force --name=zw "$ZENWAVE_ALIAS"
