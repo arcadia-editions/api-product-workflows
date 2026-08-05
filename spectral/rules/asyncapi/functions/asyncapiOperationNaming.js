@@ -31,12 +31,15 @@ module.exports = createRule((document, path, report) => {
       continue;
     }
 
-    const messageName = `${pascalCase(channelIdentity.messageName)}${pascalCase(channelIdentity.messageType)}`;
-    const expectedOperationId = `${getOperationPrefix(operation.action, isClientSpec)}${messageName}`;
+    const prefix = getOperationPrefix(operation.action, isClientSpec);
+    const messageName = pascalCase(channelIdentity.messageName);
+    const messageType = pascalCase(channelIdentity.messageType);
+    const operationIdWithType = `${prefix}${messageName}${messageType}`;
+    const operationIdWithoutType = `${prefix}${messageName}`;
 
-    if (operationId !== expectedOperationId) {
+    if (operationId !== operationIdWithType && operationId !== operationIdWithoutType) {
       report(
-        `Operation id "${operationId}" must be "${expectedOperationId}" for "${channelIdentity.messageName}-${channelIdentity.messageType}".`,
+        `Operation id "${operationId}" must be "${operationIdWithType}" or "${operationIdWithoutType}" for "${channelIdentity.messageName}-${channelIdentity.messageType}".`,
         operationPath
       );
     }
