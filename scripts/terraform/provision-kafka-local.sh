@@ -78,7 +78,6 @@ chmod +x "${PIPELINE_REPO_PATH}/scripts/terraform/provision-kafka.sh"
 chmod +x "${PIPELINE_REPO_PATH}/scripts/terraform/assert-terraform-env.sh"
 
 "${PIPELINE_REPO_PATH}/scripts/terraform/provision-kafka.sh" \
-  "$SERVICE_REPO_PATH" \
   "$PIPELINE_REPO_PATH" \
   "$ASYNCAPI_FILES" \
   "$SERVER" \

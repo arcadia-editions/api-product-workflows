@@ -120,9 +120,9 @@ jobs:
         shell: bash
         run: |
           chmod +x ./pipeline-repo/scripts/terraform/provision-kafka.sh
-          ./pipeline-repo/scripts/terraform/provision-kafka.sh \
-            ./service-repo \
-            ./pipeline-repo \
+          cd service-repo
+          ../pipeline-repo/scripts/terraform/provision-kafka.sh \
+            ../pipeline-repo \
             "${{ steps.resolve.outputs.asyncapi_files }}" \
             "${{ inputs.server }}" \
             "${{ inputs.service_repo }}"

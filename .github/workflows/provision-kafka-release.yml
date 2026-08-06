@@ -163,7 +163,7 @@ jobs:
             primary_root="$(pwd)/service-repo-asyncapi"
             asyncapi_files="${{ steps.resolve.outputs.asyncapi_path }}"
             if [[ "${{ steps.resolve.outputs.has_client }}" == "true" ]]; then
-              asyncapi_files="${asyncapi_files},$(pwd)/service-repo-client/${{ steps.resolve.outputs.client_path }}"
+              asyncapi_files="${asyncapi_files},../service-repo-client/${{ steps.resolve.outputs.client_path }}"
             fi
           else
             primary_root="$(pwd)/service-repo-client"
@@ -176,9 +176,9 @@ jobs:
         shell: bash
         run: |
           chmod +x ./pipeline-repo/scripts/terraform/provision-kafka.sh
-          ./pipeline-repo/scripts/terraform/provision-kafka.sh \
-            "${{ steps.prepare.outputs.primary_root }}" \
-            ./pipeline-repo \
+          cd "${{ steps.prepare.outputs.primary_root }}"
+          ../pipeline-repo/scripts/terraform/provision-kafka.sh \
+            ../pipeline-repo \
             "${{ steps.prepare.outputs.asyncapi_files }}" \
             prod \
             "${{ inputs.service_repo }}"
