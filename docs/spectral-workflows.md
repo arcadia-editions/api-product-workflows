@@ -54,7 +54,7 @@ The workflow performs these operations directly on `main`'s current commit, with
 2. Validate that `version` is valid semantic versioning and that tag `spectral/v{version}` does not already exist.
 3. Run `npm ci`, build the bundle, and verify it.
 4. Generate the checksum.
-5. Create and push the annotated tag `spectral/v{version}` pointing directly at the checked-out `main` commit.
+5. Commit the built `spectral/dist/spectral.js` and `spectral/dist/spectral.js.sha256` on top of the checked-out `main` commit, then create and push the annotated tag `spectral/v{version}` pointing at that commit. This commit is only pushed as the tag ref, never as a branch update, so it never joins `main`'s history.
 6. Create the GitHub Release from that tag, uploading the bundle and checksum.
 
 The job only needs `contents: write` to push the tag — no pull request is created, so no branch-protection or "Allow GitHub Actions to create and approve pull requests" setting is involved.
@@ -115,8 +115,8 @@ The generated `dist/` directory remains ignored and should not be committed from
 ## Invariants
 
 - `main` never requires `spectral/dist/spectral.js`.
-- The workflow never commits to `main`; it only pushes the release tag.
+- The workflow commits the built bundle so the tag's tree contains it, but that commit is only ever reachable via the tag ref — it is never pushed to `main` or any branch.
 - CI artifacts are temporary and are not promoted to releases.
-- A release rebuilds from the selected `main` source commit and tags that commit directly.
+- A release rebuilds from the selected `main` source commit and tags a new commit built on top of it.
 - `spectral/package.json` carries no version field; the release version exists only as the workflow input and the resulting tag/release name.
 - Release tags are immutable distribution references.

@@ -69,6 +69,8 @@ jobs:
           git config user.name 'arcadia-editions-release[bot]'
           git config user.email 'arcadia-editions-release[bot]@users.noreply.github.com'
           gh auth setup-git
+          git add -f spectral/dist/spectral.js spectral/dist/spectral.js.sha256
+          git commit -m "spectral v$INPUT_VERSION"
           git tag -a "$tag" -m "spectral v$INPUT_VERSION"
           git push origin "$tag"
 
