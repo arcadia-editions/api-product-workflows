@@ -19,9 +19,8 @@ version="$(arcadia_read_version "$type" "$file")"
 arcadia_assert_semver "$version"
 
 spectral() {
-  local ruleset="$pipeline_root/spectral/dist/spectral.js"
-  [[ -s "$ruleset" ]] || arcadia_die "Spectral bundle is missing: $ruleset"
-  "$pipeline_root/spectral/node_modules/.bin/spectral" lint --fail-severity=error -r "$ruleset" "$file"
+  local ruleset_url="${SPECTRAL_BUNDLE_URL:?SPECTRAL_BUNDLE_URL is required}"
+  npx --yes "@stoplight/spectral-cli@$ARCADIA_SPECTRAL_CLI_VERSION" lint --fail-severity=error -r "$ruleset_url" "$file"
 }
 
 case "$type" in

@@ -44,6 +44,8 @@ jobs:
     outputs:
       plan: ${{ steps.detect.outputs.plan }}
       has_kafka_artifacts: ${{ steps.kafka-detect.outputs.has_kafka_artifacts }}
+    env:
+      SPECTRAL_BUNDLE_URL: ${{ vars.SPECTRAL_BUNDLE_URL }}
     steps:
       - name: Check out caller commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -73,19 +75,9 @@ jobs:
         with:
           version: 0.138.0
 
-      - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: "22.17.0"
-          cache: npm
-          cache-dependency-path: pipeline/spectral/package-lock.json
-
       - name: Set up validation tools
         shell: bash
-        run: |
-          chmod +x pipeline/scripts/artifacts/*.sh
-          npm ci --prefix pipeline/spectral
-          npm run --prefix pipeline/spectral bundle
+        run: chmod +x pipeline/scripts/artifacts/*.sh
 
       - name: Detect changed manifest artifacts
         id: detect

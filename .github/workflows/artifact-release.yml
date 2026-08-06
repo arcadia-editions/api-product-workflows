@@ -81,6 +81,7 @@ jobs:
       ARTIFACTORY_GENERIC_RELEASE_URL: ${{ vars.ARTIFACTORY_GENERIC_RELEASE_URL }}
       ARTIFACTORY_USERNAME: ${{ secrets.artifactory_username }}
       ARTIFACTORY_PASSWORD_OR_TOKEN: ${{ secrets.artifactory_password_or_token }}
+      SPECTRAL_BUNDLE_URL: ${{ vars.SPECTRAL_BUNDLE_URL }}
     steps:
       - name: Check out trusted main
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -110,19 +111,9 @@ jobs:
         with:
           version: 0.138.0
 
-      - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: "22.17.0"
-          cache: npm
-          cache-dependency-path: pipeline/spectral/package-lock.json
-
       - name: Install pinned tools
         shell: bash
-        run: |
-          chmod +x pipeline/scripts/artifacts/*.sh
-          npm ci --prefix pipeline/spectral
-          npm run --prefix pipeline/spectral bundle
+        run: chmod +x pipeline/scripts/artifacts/*.sh
 
       - name: Resolve artifact and verify release inputs
         id: preflight
