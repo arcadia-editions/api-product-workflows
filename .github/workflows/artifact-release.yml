@@ -8,13 +8,14 @@ on:
         required: true
         type: string
       artifact:
-        description: Resolved artifactId from the architecture manifest.
+        description: Path without extension or artifactId in zenwave-architecture.yml.
         required: true
         type: string
       version:
         required: true
         type: string
       next_version:
+        description: Next development version, greater than version.
         required: true
         type: string
       default_branch:

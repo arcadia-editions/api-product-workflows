@@ -17,14 +17,14 @@ path="$(jq -r .path <<< "$record")"
 arcadia_assert_type "$type"
 arcadia_assert_safe_relative_path "$path"
 arcadia_assert_release_version "$release_version"
-arcadia_assert_snapshot_version "$next_version"
+arcadia_assert_semver "$next_version"
 [[ "$artifact_id" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || arcadia_die "unsafe artifactId: $artifact_id"
 
 ruby -e '
   require "rubygems"
   release_version, next_version = ARGV
   release = Gem::Version.new(release_version)
-  following = Gem::Version.new(next_version.sub(/-SNAPSHOT\z/, ""))
+  following = Gem::Version.new(next_version)
   abort("nextVersion must be greater than version") unless following > release
 ' "$release_version" "$next_version"
 

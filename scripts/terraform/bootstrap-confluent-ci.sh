@@ -8,7 +8,7 @@ set -euo pipefail
 # credentials and --print only when it is safe to display secrets on stdout.
 
 ENV_NAME="default"
-CLUSTER_NAME="arcadia-editions_cluster"
+CLUSTER_NAME="arcadia_editions_cluster"
 SERVICE_ACCOUNT_NAME="zenwave-ci-sa"
 CLOUD_PROVIDER="gcp"
 REGION="us-east1"
@@ -676,14 +676,14 @@ main() {
   if [[ "$GITHUB_SECRETS" == true ]]; then
     set_github_secret "CONFLUENT_CLOUD_API_KEY" "$confluent_cloud_api_key"
     set_github_secret "CONFLUENT_CLOUD_API_SECRET" "$confluent_cloud_api_secret"
-    set_github_secret "KAFKA_ID" "$kafka_id"
-    set_github_secret "KAFKA_REST_ENDPOINT" "$kafka_rest_endpoint"
-    set_github_secret "KAFKA_API_KEY" "$kafka_api_key"
-    set_github_secret "KAFKA_API_SECRET" "$kafka_api_secret"
-    set_github_secret "SCHEMA_REGISTRY_ID" "$schema_registry_id"
-    set_github_secret "SCHEMA_REGISTRY_REST_ENDPOINT" "$schema_registry_rest_endpoint"
-    set_github_secret "SCHEMA_REGISTRY_API_KEY" "$schema_registry_api_key"
-    set_github_secret "SCHEMA_REGISTRY_API_SECRET" "$schema_registry_api_secret"
+    set_github_variable "CONFLUENT_KAFKA_CLUSTER_ID" "$kafka_id"
+    set_github_variable "CONFLUENT_KAFKA_REST_ENDPOINT" "$kafka_rest_endpoint"
+    set_github_secret "CONFLUENT_KAFKA_API_KEY" "$kafka_api_key"
+    set_github_secret "CONFLUENT_KAFKA_API_SECRET" "$kafka_api_secret"
+    set_github_variable "CONFLUENT_SCHEMA_REGISTRY_ID" "$schema_registry_id"
+    set_github_variable "CONFLUENT_SCHEMA_REGISTRY_REST_ENDPOINT" "$schema_registry_rest_endpoint"
+    set_github_secret "CONFLUENT_SCHEMA_REGISTRY_API_KEY" "$schema_registry_api_key"
+    set_github_secret "CONFLUENT_SCHEMA_REGISTRY_API_SECRET" "$schema_registry_api_secret"
     set_github_variable "CONFLUENT_SCHEMA_REGISTRY_CRN" "$schema_registry_crn"
     [[ "$DRY_RUN" == true ]] || log "Stored GitHub configuration"
   fi

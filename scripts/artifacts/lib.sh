@@ -45,11 +45,6 @@ arcadia_assert_release_version() {
   [[ "$1" != *-SNAPSHOT ]] || arcadia_die "release version must not end in -SNAPSHOT: $1"
 }
 
-arcadia_assert_snapshot_version() {
-  arcadia_assert_semver "$1"
-  [[ "$1" == *-SNAPSHOT ]] || arcadia_die "nextVersion must end in -SNAPSHOT: $1"
-}
-
 arcadia_assert_safe_relative_path() {
   local path="${1:-}"
   [[ -n "$path" && "$path" != /* && "$path" != *\\* ]] || arcadia_die "unsafe relative path: $path"

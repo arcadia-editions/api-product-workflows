@@ -82,13 +82,13 @@ Each API repository has a thin `.github/workflows/artifact-release.yml` caller. 
 | ------------- | ------------------------------------------------------ | -------------------------------------------------------- |
 | `artifact`    | Resolved manifest `artifactId`, not the artifact type  | `domain-model`, `openapi`, `asyncapi`, `asyncapi-client` |
 | `version`     | Release version without a `v` prefix                   | `1.4.0`                                                  |
-| `nextVersion` | Greater next development version ending in `-SNAPSHOT` | `1.5.0-SNAPSHOT`                                         |
+| `nextVersion` | Greater next development version                       | `1.5.0`                                                  |
 
 The workflow derives the artifact type, source path, coordinates and current version from ManifestCore. It fails when the artifact does not belong uniquely to the calling repository.
 
 ### What a successful release does
 
-For `artifact=asyncapi`, `version=1.4.0` and `nextVersion=1.5.0-SNAPSHOT`, expect:
+For `artifact=asyncapi`, `version=1.4.0` and `nextVersion=1.5.0`, expect:
 
 1. Preflight validates the inputs, source version and absence of conflicting branches, tags and GitHub releases.
 2. A branch named `release/asyncapi/v1.4.0` is created from `main`.
@@ -99,7 +99,7 @@ For `artifact=asyncapi`, `version=1.4.0` and `nextVersion=1.5.0-SNAPSHOT`, expec
 7. A GitHub release titled `asyncapi v1.4.0` is created from the tag with the Maven JAR and checksum attached.
 8. The architecture repository receives an `artifact-released` dispatch.
 9. The architecture repository updates its local `zenwave-architecture.yml` through its own pull request and triggers the EventCatalog rebuild after merge.
-10. The selected API source is changed to `1.5.0-SNAPSHOT` on the release branch.
+10. The selected API source is changed to `1.5.0` on the release branch.
 11. A pull request to `main` is opened, merged through branch protection and the release branch is deleted.
 
 Other artifacts in the same repository are not versioned, packaged or published by that run.
