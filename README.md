@@ -148,6 +148,7 @@ Kafka/Schema Registry provisioning is split into four reusable workflows, plus t
 | Develop apply     | `provision-kafka-develop.yml`  | job inside `artifact-ci.yml`, push or manual dispatch on `develop` | none - a passing plan applies immediately    |
 | Release           | `provision-kafka-release.yml`  | manual `workflow_dispatch` per artifact                      | none - builds and publishes a bundle, never applies |
 | Promote           | `provision-kafka-promote.yml`  | manual `workflow_dispatch` per artifact                      | the person running it - see below                 |
+| Destroy           | `provision-kafka-destroy.yml`  | manual `workflow_dispatch` per artifact                      | typing the exact workspace name - see below       |
 
 ### Plan and develop apply (no caller file needed)
 
@@ -205,6 +206,24 @@ jobs:
 A repository with both an `asyncapi` and an `asyncapi-client` artifact promotes each independently - promoting one to `prod` never requires or waits on the other.
 
 Terraform workspace names are `{service_repo}-{artifactId}-develop`, `{service_repo}-{artifactId}-pre` and `{service_repo}-{artifactId}-prod` - there is no `staging` workspace.
+
+### Destroy (tear down one artifact's environment)
+
+```yaml
+jobs:
+  destroy-kafka-asyncapi:
+    uses: arcadia-editions/api-product-workflows/.github/workflows/provision-kafka-destroy.yml@main
+    with:
+      service_repo: catalog-products-api
+      artifact: asyncapi
+      target_env: develop     # or: pre, prod
+      confirm: catalog-products-api-asyncapi-develop
+    secrets: inherit
+```
+
+`provision-kafka-destroy.yml` tears down one artifact's environment: it runs `terraform destroy` against `{service_repo}-{artifact}-{target_env}` (removing the Kafka topics, Schema Registry subjects and service account that workspace's state tracks in Confluent Cloud) and, once that succeeds, deletes the Terraform Cloud workspace itself. It does not check out the service repo, an AsyncAPI file or any release bundle - `terraform destroy` tears down whatever a workspace's state already tracks regardless of the current configuration, so the shared `terraform/common` overlay (provider config plus the `cloud` block) is all it needs.
+
+This is deliberately irreversible and requires typing `confirm` as the exact workspace name being destroyed (`{service_repo}-{artifact}-{target_env}`) - the run fails immediately if it does not match. There is no other gate: like `promote`, the deliberate act of typing that value and pressing run is the approval.
 
 ### Deployment state vs. the architecture manifest
 
@@ -267,6 +286,7 @@ Useful options:
 - `.github/workflows/provision-kafka-develop.yml`: reusable AsyncAPI-to-Terraform apply for `develop`, called from `artifact-ci.yml`.
 - `.github/workflows/provision-kafka-release.yml`: reusable single-artifact `asyncapi`/`asyncapi-client` build, published as a `release/kafka/{artifactId}/vX` bundle.
 - `.github/workflows/provision-kafka-promote.yml`: reusable promotion of a published bundle to `pre`/`prod`.
+- `.github/workflows/provision-kafka-destroy.yml`: reusable teardown of one artifact's Kafka/Confluent resources and Terraform Cloud workspace.
 - `scripts/artifacts/ManifestTool.java`: HTTP manifest inventory and coordinate resolution.
 - `scripts/artifacts/DslTool.java`: ZDL/ZFL parsing and version editing.
 - `scripts/artifacts/`: validation, packaging and publication helpers.

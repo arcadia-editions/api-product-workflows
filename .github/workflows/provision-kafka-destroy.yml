@@ -1,0 +1,188 @@
+name: Destroy Kafka provisioning workspace
+
+on:
+  workflow_call:
+    inputs:
+      service_repo:
+        description: Repository name inside the arcadia-editions org.
+        required: true
+        type: string
+      artifact:
+        description: artifactId of the asyncapi/asyncapi-client artifact whose infrastructure is being torn down.
+        required: true
+        type: string
+      target_env:
+        description: Environment to tear down. One of develop, pre or prod.
+        required: true
+        type: string
+      confirm:
+        description: Type the exact Terraform workspace name being destroyed ({service_repo}-{artifact}-{target_env}) to confirm this irreversible action.
+        required: true
+        type: string
+      pipeline_ref:
+        description: Git ref to use when checking out the shared pipeline repository.
+        required: false
+        default: main
+        type: string
+    secrets:
+      checkout_token:
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kafka-destroy-${{ github.repository }}-${{ inputs.artifact }}-${{ inputs.target_env }}
+  cancel-in-progress: false
+
+jobs:
+  destroy:
+    name: Destroy Kafka/Confluent resources and workspace
+    runs-on: ubuntu-latest
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+      TF_CLOUD_ORGANIZATION: ${{ vars.TF_CLOUD_ORGANIZATION }}
+      TF_TOKEN_app_terraform_io: ${{ secrets.TF_TOKEN_app_terraform_io }}
+      PIPELINE_TF_WORKSPACE: ${{ format('{0}-{1}-{2}', inputs.service_repo, inputs.artifact, inputs.target_env) }}
+      TF_VAR_confluent_cloud_api_key: ${{ secrets.CONFLUENT_CLOUD_API_KEY }}
+      TF_VAR_confluent_cloud_api_secret: ${{ secrets.CONFLUENT_CLOUD_API_SECRET }}
+      TF_VAR_kafka_id: ${{ vars.CONFLUENT_KAFKA_CLUSTER_ID }}
+      TF_VAR_kafka_rest_endpoint: ${{ vars.CONFLUENT_KAFKA_REST_ENDPOINT }}
+      TF_VAR_kafka_api_key: ${{ secrets.CONFLUENT_KAFKA_API_KEY }}
+      TF_VAR_kafka_api_secret: ${{ secrets.CONFLUENT_KAFKA_API_SECRET }}
+      TF_VAR_schema_registry_id: ${{ vars.CONFLUENT_SCHEMA_REGISTRY_ID }}
+      TF_VAR_schema_registry_crn: ${{ vars.CONFLUENT_SCHEMA_REGISTRY_CRN }}
+      TF_VAR_schema_registry_rest_endpoint: ${{ vars.CONFLUENT_SCHEMA_REGISTRY_REST_ENDPOINT }}
+      TF_VAR_schema_registry_api_key: ${{ secrets.CONFLUENT_SCHEMA_REGISTRY_API_KEY }}
+      TF_VAR_schema_registry_api_secret: ${{ secrets.CONFLUENT_SCHEMA_REGISTRY_API_SECRET }}
+    steps:
+      - name: Validate target_env
+        shell: bash
+        run: |
+          case "${{ inputs.target_env }}" in
+            develop|pre|prod) ;;
+            *) echo "target_env must be develop, pre or prod, got: ${{ inputs.target_env }}" >&2; exit 1 ;;
+          esac
+
+      - name: Require explicit confirmation
+        shell: bash
+        run: |
+          expected="$PIPELINE_TF_WORKSPACE"
+          if [[ "${{ inputs.confirm }}" != "$expected" ]]; then
+            echo "confirm must exactly equal the Terraform workspace being destroyed: $expected" >&2
+            exit 1
+          fi
+
+      - name: Checkout shared pipeline repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: arcadia-editions/api-product-workflows
+          ref: ${{ inputs.pipeline_ref }}
+          token: ${{ secrets.checkout_token || github.token }}
+          path: pipeline-repo
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+
+      - name: Prepare minimal Terraform config for the target workspace
+        shell: bash
+        run: |
+          # Destroying only needs a valid provider/backend configuration
+          # pointed at the right workspace - terraform destroy tears down
+          # whatever is already tracked in that workspace's state regardless
+          # of whether any resource blocks are declared locally, so the
+          # shared common overlay (provider.tf + cloud.tftpl) is enough. No
+          # AsyncAPI file, service repo checkout or release bundle required.
+          mkdir -p destroy/terraform
+          cp -R pipeline-repo/terraform/common/. destroy/terraform/
+          test -f destroy/terraform/cloud.tftpl || { echo "terraform/common is missing cloud.tftpl" >&2; exit 1; }
+          sed \
+            -e "s|__TF_CLOUD_ORGANIZATION__|${TF_CLOUD_ORGANIZATION}|g" \
+            -e "s|__TF_WORKSPACE__|${PIPELINE_TF_WORKSPACE}|g" \
+            destroy/terraform/cloud.tftpl > destroy/terraform/cloud.tf
+          rm -f destroy/terraform/cloud.tftpl
+
+      - name: Check Terraform inputs
+        shell: bash
+        run: |
+          chmod +x ./pipeline-repo/scripts/terraform/assert-terraform-env.sh
+          ./pipeline-repo/scripts/terraform/assert-terraform-env.sh \
+            TF_VAR_confluent_cloud_api_key \
+            TF_VAR_confluent_cloud_api_secret \
+            TF_VAR_kafka_id \
+            TF_VAR_kafka_rest_endpoint \
+            TF_VAR_kafka_api_key \
+            TF_VAR_kafka_api_secret \
+            TF_VAR_schema_registry_id \
+            TF_VAR_schema_registry_crn \
+            TF_VAR_schema_registry_rest_endpoint \
+            TF_VAR_schema_registry_api_key \
+            TF_VAR_schema_registry_api_secret \
+            TF_CLOUD_ORGANIZATION \
+            TF_TOKEN_app_terraform_io \
+            PIPELINE_TF_WORKSPACE
+
+      - name: Terraform init
+        working-directory: destroy/terraform
+        run: |
+          unset TF_WORKSPACE
+          terraform init
+
+      - name: Report resources about to be destroyed
+        working-directory: destroy/terraform
+        run: |
+          provisioned_from="$(terraform output -raw provisioned_from 2>/dev/null || echo '(none)')"
+          echo "### Destroying ${{ inputs.service_repo }} / ${{ inputs.artifact }} (${{ inputs.target_env }})" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Terraform workspace: \`$PIPELINE_TF_WORKSPACE\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- currently applied from: \`$provisioned_from\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Terraform validate
+        working-directory: destroy/terraform
+        run: |
+          unset TF_WORKSPACE
+          terraform validate
+
+      - name: Terraform plan (destroy)
+        working-directory: destroy/terraform
+        run: |
+          unset TF_WORKSPACE
+          terraform plan -destroy -out=tfplan
+
+      - name: Export plan text
+        working-directory: destroy/terraform
+        run: terraform show -no-color tfplan > tfplan.txt
+
+      - name: Terraform apply (destroy)
+        working-directory: destroy/terraform
+        run: |
+          unset TF_WORKSPACE
+          terraform apply -auto-approve tfplan
+
+      - name: Remove raw Terraform plan
+        if: always()
+        working-directory: destroy/terraform
+        run: rm -f tfplan
+
+      - name: Upload destroy plan
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ inputs.service_repo }}-${{ inputs.artifact }}-terraform-destroy-${{ inputs.target_env }}
+          path: destroy/terraform/tfplan.txt
+          if-no-files-found: error
+
+      - name: Delete Terraform Cloud workspace
+        shell: bash
+        run: |
+          status="$(curl -s -o /tmp/tfc-delete.json -w '%{http_code}' \
+            --request DELETE \
+            --header "Authorization: Bearer ${TF_TOKEN_app_terraform_io}" \
+            --header "Content-Type: application/vnd.api+json" \
+            "https://app.terraform.io/api/v2/organizations/${TF_CLOUD_ORGANIZATION}/workspaces/${PIPELINE_TF_WORKSPACE}")"
+          if [[ "$status" != "204" && "$status" != "404" ]]; then
+            echo "failed to delete Terraform Cloud workspace $PIPELINE_TF_WORKSPACE (HTTP $status)" >&2
+            cat /tmp/tfc-delete.json >&2
+            exit 1
+          fi
+          echo "Terraform Cloud workspace $PIPELINE_TF_WORKSPACE deleted (or already absent)" | tee -a "$GITHUB_STEP_SUMMARY"
