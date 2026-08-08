@@ -72,12 +72,18 @@ arcadia_read_version() {
   esac
 }
 
+arcadia_resolve_refs() {
+  local root="$1" path="$2"
+  arcadia_require_command jbang
+  jbang --quiet "$ARCADIA_ARTIFACTS_SCRIPT_DIR/RefResolverTool.java" resolve-refs "$root" "$path"
+}
+
 arcadia_source_files() {
   local root="$1" type="$2" path="$3"
   printf '%s\n' "$path"
-  if [[ "$type" == "asyncapi" ]]; then
-    git -C "$root" ls-files -- '*.avsc' '**/*.avsc'
-  fi
+  case "$type" in
+    openapi|asyncapi) arcadia_resolve_refs "$root" "$path" ;;
+  esac
 }
 
 arcadia_publish_to_apicurio() {

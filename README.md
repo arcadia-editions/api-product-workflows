@@ -39,20 +39,21 @@ CI has read-only repository permissions and does not create commits, tags, packa
 ### Change detection
 
 - Changing a declared artifact path selects that artifact.
-- Changing an `.avsc` file selects the repository's `asyncapi` and `asyncapi-client` artifacts.
+- For `openapi` and `asyncapi` artifacts, changing a file resolved through the artifact's `$ref` graph (schema fragments, `.avsc` files, ...) selects only the artifacts that actually reference it, not every artifact of that type. `asyncapi-client` artifacts are validated against their own file only and never pull in `.avsc` refs.
+- Deleting any file selects every declared artifact: a deleted `$ref` target can no longer be resolved, so CI can't tell which artifacts depended on it and falls back to full validation.
 - Changing only files under `.github/workflows/` or `.github/actions/` selects all declared artifacts.
 - Unrelated files do not trigger artifact validation.
 - The repository name from the GitHub caller context identifies the manifest owner; there is no `groupId`, `artifactId` or artifact list in the caller workflow.
 
 ### Validation and publication capabilities
 
-| Type              | Validation                                      | Maven | Apicurio | Artifactory |
-| ----------------- | ----------------------------------------------- | ----- | -------- | ----------- |
-| `zdl`             | ZenWave ZDL parser                              | Yes   | No       | Yes         |
-| `zfl`             | ZenWave ZFL parser                              | Yes   | No       | Yes         |
-| `openapi`         | Redocly and Spectral                            | Yes   | Yes      | Yes         |
-| `asyncapi`        | AsyncAPI CLI, Spectral and tracked Avro schemas | Yes   | Yes      | Yes         |
-| `asyncapi-client` | AsyncAPI CLI and Spectral                       | Yes   | Yes      | Yes         |
+| Type              | Validation                                         | Maven | Apicurio | Artifactory |
+| ----------------- | -------------------------------------------------- | ----- | -------- | ----------- |
+| `zdl`             | ZenWave ZDL parser                                 | Yes   | No       | Yes         |
+| `zfl`             | ZenWave ZFL parser                                 | Yes   | No       | Yes         |
+| `openapi`         | Redocly and Spectral                               | Yes   | Yes      | Yes         |
+| `asyncapi`        | AsyncAPI CLI, Spectral and referenced Avro schemas | Yes   | Yes      | Yes         |
+| `asyncapi-client` | AsyncAPI CLI and Spectral                          | Yes   | Yes      | Yes         |
 
 The publication columns describe release capabilities. CI only performs validation.
 

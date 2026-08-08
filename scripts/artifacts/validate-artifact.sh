@@ -35,9 +35,10 @@ case "$type" in
     npx --yes "@asyncapi/cli@$ARCADIA_ASYNCAPI_CLI_VERSION" validate "$file"
     spectral
     if [[ "$type" == "asyncapi" ]]; then
-      while IFS= read -r avro; do
-        [[ -z "$avro" ]] || ruby -rjson -e 'JSON.parse(File.read(ARGV.fetch(0)))' "$root/$avro"
-      done < <(git -C "$root" ls-files -- '*.avsc' '**/*.avsc')
+      while IFS= read -r referenced; do
+        [[ "$referenced" == *.avsc ]] || continue
+        ruby -rjson -e 'JSON.parse(File.read(ARGV.fetch(0)))' "$root/$referenced"
+      done < <(arcadia_resolve_refs "$root" "$relative_path")
     fi
     ;;
 esac
