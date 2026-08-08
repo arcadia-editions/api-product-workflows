@@ -140,59 +140,71 @@ The workflow deliberately stops when the release branch, tag or GitHub release a
 
 ## 3. Terraform provisioning from AsyncAPI
 
-Kafka/Schema Registry provisioning is split into four reusable workflows, plus two jobs folded directly into `artifact-ci.yml`. Only artifacts declared in the architecture manifest participate: a repository that owns neither `asyncapi` nor `asyncapi-client` never runs any Kafka step.
+Kafka/Schema Registry provisioning is split into four reusable workflows, plus two jobs folded directly into `artifact-ci.yml`. Only artifacts declared in the architecture manifest participate: a repository that owns neither `asyncapi` nor `asyncapi-client` never runs any Kafka step. Each `asyncapi`/`asyncapi-client` artifact a repository owns is provisioned **independently**, in its own Terraform workspace - a repository with both never shares state, a release, or a promotion between them.
 
 | Stage             | File                          | Trigger                                                     | Gate                                            |
 | ----------------- | ------------------------------ | ------------------------------------------------------------ | ------------------------------------------------ |
 | Plan              | `provision-kafka-plan.yml`     | job inside `artifact-ci.yml`, every PR/push                  | none, plan-only                                   |
 | Develop apply     | `provision-kafka-develop.yml`  | job inside `artifact-ci.yml`, push or manual dispatch on `develop` | none - a passing plan applies immediately    |
-| Combined release  | `provision-kafka-release.yml`  | manual `workflow_dispatch` per service repo                  | none - builds and publishes a bundle, never applies |
-| Promote           | `provision-kafka-promote.yml`  | manual `workflow_dispatch` per service repo                  | the person running it - see below                 |
+| Release           | `provision-kafka-release.yml`  | manual `workflow_dispatch` per artifact                      | none - builds and publishes a bundle, never applies |
+| Promote           | `provision-kafka-promote.yml`  | manual `workflow_dispatch` per artifact                      | the person running it - see below                 |
 
 ### Plan and develop apply (no caller file needed)
 
 `artifact-ci.yml`'s `validate` job resolves the manifest inventory for the calling repository and exposes `has_kafka_artifacts`. When true, two additional jobs run in the same workflow:
 
-- **`kafka-plan`** (`needs: validate`) calls `provision-kafka-plan.yml`: generates Terraform from every `asyncapi`/`asyncapi-client` artifact the repository owns, runs `init`/`validate`/`plan`, uploads the plan. Runs on every PR and push, regardless of whether this particular push touched an AsyncAPI file - Terraform plans are idempotent, so replanning on every CI run catches drift instead of only catching changes.
-- **`kafka-develop`** (`needs: kafka-plan`, `if: ref == develop`) calls `provision-kafka-develop.yml`: the same generation, plus `apply` against the `{service_repo}-develop` workspace. Triggers on `push` to `develop` and on a manual `workflow_dispatch` run from `develop` - both use the existing `workflow_dispatch` trigger each repository's `artifact-ci.yml` caller already has for full-validation runs, so **no new workflow file is required per repository**. There is no approval step: a passing plan is the only condition before apply, matching that development has no human gateway.
+- **`kafka-plan`** (`needs: validate`) calls `provision-kafka-plan.yml`: resolves every `asyncapi`/`asyncapi-client` artifact the repository owns, then runs a matrix job - one leg per artifact - that generates Terraform from just that artifact's file and runs `init`/`validate`/`plan`, uploading the plan. Runs on every PR and push, regardless of whether this particular push touched an AsyncAPI file - Terraform plans are idempotent, so replanning on every CI run catches drift instead of only catching changes.
+- **`kafka-develop`** (`needs: kafka-plan`, `if: ref == develop`) calls `provision-kafka-develop.yml`: the same per-artifact matrix, plus `apply` against each artifact's own `{service_repo}-{artifactId}-develop` workspace. Triggers on `push` to `develop` and on a manual `workflow_dispatch` run from `develop` - both use the existing `workflow_dispatch` trigger each repository's `artifact-ci.yml` caller already has for full-validation runs, so **no new workflow file is required per repository**. There is no approval step: a passing plan is the only condition before apply, matching that development has no human gateway.
 
 Because these run as jobs *inside* `artifact-ci.yml` (a nested reusable-workflow call one level deeper), the caller's `secrets: inherit` must be present at both levels - `artifact-ci.yml`'s `kafka-plan`/`kafka-develop` jobs re-declare `secrets: inherit` when invoking `provision-kafka-plan.yml`/`provision-kafka-develop.yml`.
 
-### Combined release (build once)
+### Release (build one artifact's bundle)
 
-`asyncapi` and `asyncapi-client` are released independently by `artifact-release.yml`, each with its own version. `provision-kafka-release.yml` is where a human explicitly pairs two already-released versions into one immutable, promotable bundle:
+`asyncapi` and `asyncapi-client` are released independently by `artifact-release.yml`, each with its own version. `provision-kafka-release.yml` follows the same one-artifact-per-call shape: a human builds a promotable Terraform bundle for a single already-released artifact version:
 
 ```yaml
 jobs:
-  release-kafka:
+  release-kafka-asyncapi:
     uses: arcadia-editions/api-product-workflows/.github/workflows/provision-kafka-release.yml@main
     with:
       service_repo: catalog-products-api
-      asyncapi_version: "1.4.0"
-      asyncapi_client_version: "2.1.0"
+      artifact: asyncapi
+      version: "1.4.0"
       kafka_version: "7"
+    secrets: inherit
+
+  release-kafka-asyncapi-client:
+    uses: arcadia-editions/api-product-workflows/.github/workflows/provision-kafka-release.yml@main
+    with:
+      service_repo: catalog-products-api
+      artifact: asyncapi-client
+      version: "2.1.0"
+      kafka_version: "3"
     secrets: inherit
 ```
 
-It checks out `refs/tags/release/asyncapi/v1.4.0` and `refs/tags/release/asyncapi-client/v2.1.0` into separate directories, generates one combined Terraform tree from both, sanity-checks it offline (`terraform init -backend=false && terraform validate`, no Confluent/TFC credentials needed), and publishes it as GitHub release `release/kafka/v7` with the generated Terraform tree attached as a zip. Every manifest artifact the repository owns must have a version supplied - an artifact declared in the manifest with no corresponding version input fails the run rather than silently omitting it. The bundle's `cloud.tf` is deliberately left unrendered (`cloud.tftpl`) at this stage, because the same bundle is later applied to more than one Terraform workspace.
+Each call resolves `artifact` against the architecture manifest, checks out `refs/tags/release/{artifactId}/v{version}`, generates Terraform from just that one file, sanity-checks it offline (`terraform init -backend=false && terraform validate`, no Confluent/TFC credentials needed), and publishes it as GitHub release `release/kafka/{artifactId}/v{kafka_version}` with the generated Terraform tree attached as a zip. `kafka_version` is that artifact's own bundle version, independent of every other artifact's bundle version and of the source artifact's own version. The bundle's `cloud.tf` is deliberately left unrendered (`cloud.tftpl`) at this stage, because the same bundle is later applied to more than one Terraform workspace.
 
 ### Promote (apply a bundle, never regenerate)
 
 ```yaml
 jobs:
-  promote-kafka:
+  promote-kafka-asyncapi:
     uses: arcadia-editions/api-product-workflows/.github/workflows/provision-kafka-promote.yml@main
     with:
       service_repo: catalog-products-api
+      artifact: asyncapi
       target_env: pre        # or: prod
       kafka_release: "7"     # required for pre, must be empty for prod
     secrets: inherit
 ```
 
-- **`target_env: pre`** downloads the `release/kafka/vX` bundle named by `kafka_release`, renders `cloud.tf` for the `{service_repo}-pre` workspace, and applies it. This is the only place a human picks a specific version - running the workflow with an explicit `kafka_release` *is* the approval, there is no separate reviewer gate layered on top.
-- **`target_env: prod`** takes no version input. It reads the `provisioned_from` Terraform output currently applied to `{service_repo}-pre`, downloads that exact same bundle, and applies it to `{service_repo}-prod`. `prod` cannot diverge from `pre` by construction: to change what reaches `prod`, promote `pre` with a new `kafka_release` first, then promote `prod` from that. There is no bypass input.
+- **`target_env: pre`** downloads the `release/kafka/{artifact}/vX` bundle named by `kafka_release`, renders `cloud.tf` for the `{service_repo}-{artifact}-pre` workspace, and applies it. This is the only place a human picks a specific version - running the workflow with an explicit `kafka_release` *is* the approval, there is no separate reviewer gate layered on top.
+- **`target_env: prod`** takes no version input. It reads the `provisioned_from` Terraform output currently applied to `{service_repo}-{artifact}-pre`, downloads that exact same bundle, and applies it to `{service_repo}-{artifact}-prod`. `prod` cannot diverge from `pre` by construction: to change what reaches `prod`, promote `pre` with a new `kafka_release` first, then promote `prod` from that. There is no bypass input.
 
-Terraform workspace names are `{service_repo}-develop`, `{service_repo}-pre` and `{service_repo}-prod` - there is no `staging` workspace.
+A repository with both an `asyncapi` and an `asyncapi-client` artifact promotes each independently - promoting one to `prod` never requires or waits on the other.
+
+Terraform workspace names are `{service_repo}-{artifactId}-develop`, `{service_repo}-{artifactId}-pre` and `{service_repo}-{artifactId}-prod` - there is no `staging` workspace.
 
 ### Deployment state vs. the architecture manifest
 
@@ -253,7 +265,7 @@ Useful options:
 - `.github/workflows/artifact-release.yml`: reusable independent artifact release.
 - `.github/workflows/provision-kafka-plan.yml`: reusable AsyncAPI-to-Terraform plan, called from `artifact-ci.yml`.
 - `.github/workflows/provision-kafka-develop.yml`: reusable AsyncAPI-to-Terraform apply for `develop`, called from `artifact-ci.yml`.
-- `.github/workflows/provision-kafka-release.yml`: reusable combined `asyncapi`/`asyncapi-client` build, published as a `release/kafka/vX` bundle.
+- `.github/workflows/provision-kafka-release.yml`: reusable single-artifact `asyncapi`/`asyncapi-client` build, published as a `release/kafka/{artifactId}/vX` bundle.
 - `.github/workflows/provision-kafka-promote.yml`: reusable promotion of a published bundle to `pre`/`prod`.
 - `scripts/artifacts/ManifestTool.java`: HTTP manifest inventory and coordinate resolution.
 - `scripts/artifacts/DslTool.java`: ZDL/ZFL parsing and version editing.

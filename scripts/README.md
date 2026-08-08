@@ -2,8 +2,10 @@
 
 Run the GitHub-equivalent flow locally from Git Bash. Invoke the helper from
 the service repository directory and pass the target environment. The service
-repository name is inferred from the current directory, and the Terraform workspace is derived as
-`<service-repository>-<environment>`:
+repository name is inferred from the current directory. Every `asyncapi.yml`/`asyncapi-client.yml`
+file found locally is provisioned independently, one Terraform workspace each, derived as
+`<service-repository>-<artifact>-<environment>` (`<artifact>` being the filename without its
+extension, e.g. `asyncapi`, `asyncapi-client`):
 
 ```bash
 cd ../catalog-products-api
@@ -48,8 +50,11 @@ export ASYNCAPI_FILE=asyncapi.yml
 export PIPELINE_REPO_PATH=/path/to/api-product-workflows
 ```
 
-For the example above, `PIPELINE_TF_WORKSPACE` is set to
-`catalog-products-api-develop`.
+Setting `ASYNCAPI_FILE` provisions only that one file instead of looping over every file found.
+
+For the example above, with both `asyncapi.yml` and `asyncapi-client.yml` present,
+`PIPELINE_TF_WORKSPACE` is set to `catalog-products-api-asyncapi-develop` and then
+`catalog-products-api-asyncapi-client-develop` in turn.
 
 The service repository can also be passed explicitly before the environment:
 

@@ -5,6 +5,8 @@ usage() {
   echo "Usage: $0 <environment>" >&2
   echo "   or: $0 <service-repository> <environment>" >&2
   echo "Run this script from the service repository directory." >&2
+  echo "Provisions every asyncapi.yml/asyncapi-client.yml found locally, independently." >&2
+  echo "Set ASYNCAPI_FILE to provision a single specific file instead." >&2
 }
 
 if [[ $# -lt 1 || $# -gt 2 ]]; then
@@ -45,17 +47,23 @@ else
   fi
 fi
 
-PIPELINE_TF_WORKSPACE="${SERVICE_REPO_NAME}-${SERVER}"
 PIPELINE_REPO_PATH="${PIPELINE_REPO_PATH:-$PIPELINE_REPO_PATH_DEFAULT}"
-ASYNCAPI_FILES_DEFAULT="asyncapi.yml"
-if [[ -f "${SERVICE_REPO_PATH}/asyncapi-client.yml" ]]; then
-  ASYNCAPI_FILES_DEFAULT="asyncapi.yml,asyncapi-client.yml"
-fi
-ASYNCAPI_FILES="${ASYNCAPI_FILES:-$ASYNCAPI_FILES_DEFAULT}"
 APPLY_MODE="${APPLY_MODE:-false}"
 export TF_IN_AUTOMATION="${TF_IN_AUTOMATION:-true}"
 export TF_INPUT="${TF_INPUT:-false}"
-export PIPELINE_TF_WORKSPACE
+
+asyncapi_files=()
+if [[ -n "${ASYNCAPI_FILE:-}" ]]; then
+  asyncapi_files=("$ASYNCAPI_FILE")
+else
+  [[ -f "${SERVICE_REPO_PATH}/asyncapi.yml" ]] && asyncapi_files+=("asyncapi.yml")
+  [[ -f "${SERVICE_REPO_PATH}/asyncapi-client.yml" ]] && asyncapi_files+=("asyncapi-client.yml")
+fi
+
+if [[ "${#asyncapi_files[@]}" -eq 0 ]]; then
+  echo "No AsyncAPI file found (looked for asyncapi.yml, asyncapi-client.yml; set ASYNCAPI_FILE to override)" >&2
+  exit 1
+fi
 
 required_commands=(
   jbang
@@ -77,71 +85,87 @@ fi
 chmod +x "${PIPELINE_REPO_PATH}/scripts/terraform/provision-kafka.sh"
 chmod +x "${PIPELINE_REPO_PATH}/scripts/terraform/assert-terraform-env.sh"
 
-"${PIPELINE_REPO_PATH}/scripts/terraform/provision-kafka.sh" \
-  "$PIPELINE_REPO_PATH" \
-  "$ASYNCAPI_FILES" \
-  "$SERVER" \
-  "$SERVICE_REPO_NAME"
+for asyncapi_file in "${asyncapi_files[@]}"; do
+  # Local-only stand-in for the manifest's real artifactId: the filename
+  # without its extension. CI resolves the actual artifactId from the
+  # architecture manifest instead.
+  artifact_id="$(basename "$asyncapi_file")"
+  artifact_id="${artifact_id%.*}"
 
-"${PIPELINE_REPO_PATH}/scripts/terraform/assert-terraform-env.sh" \
-  TF_CLOUD_ORGANIZATION \
-  TF_TOKEN_app_terraform_io \
-  PIPELINE_TF_WORKSPACE \
-  TF_VAR_confluent_cloud_api_key \
-  TF_VAR_confluent_cloud_api_secret \
-  TF_VAR_kafka_id \
-  TF_VAR_kafka_rest_endpoint \
-  TF_VAR_kafka_api_key \
-  TF_VAR_kafka_api_secret \
-  TF_VAR_schema_registry_id \
-  TF_VAR_schema_registry_crn \
-  TF_VAR_schema_registry_rest_endpoint \
-  TF_VAR_schema_registry_api_key \
-  TF_VAR_schema_registry_api_secret
+  echo "=== Provisioning $asyncapi_file (artifact: $artifact_id) ===" >&2
 
-cd "${SERVICE_REPO_PATH}/target/terraform"
+  PIPELINE_TF_WORKSPACE="${SERVICE_REPO_NAME}-${artifact_id}-${SERVER}"
+  export PIPELINE_TF_WORKSPACE
 
-unset TF_WORKSPACE
-terraform init
-terraform validate
-terraform plan -out=tfplan
-terraform show -no-color tfplan > tfplan.txt
+  "${PIPELINE_REPO_PATH}/scripts/terraform/provision-kafka.sh" \
+    "$PIPELINE_REPO_PATH" \
+    "$asyncapi_file" \
+    "$SERVER" \
+    "$SERVICE_REPO_NAME" \
+    "$artifact_id"
 
-if command -v jq >/dev/null 2>&1; then
-  terraform show -json tfplan | jq '{
-    format_version,
-    terraform_version,
-    resource_changes: [
-      .resource_changes[]? | {
-        address,
-        mode,
-        type,
-        name,
-        provider_name,
-        actions: .change.actions,
-        before_sensitive: (.change.before_sensitive // null),
-        after_sensitive: (.change.after_sensitive // null),
-        after_unknown: (.change.after_unknown // null)
-      }
-    ],
-    output_changes: (
-      .output_changes
-      | to_entries
-      | map({
-          key,
-          value: {
-            actions: (.value.actions // []),
-            sensitive: (.value.sensitive // false)
+  "${PIPELINE_REPO_PATH}/scripts/terraform/assert-terraform-env.sh" \
+    TF_CLOUD_ORGANIZATION \
+    TF_TOKEN_app_terraform_io \
+    PIPELINE_TF_WORKSPACE \
+    TF_VAR_confluent_cloud_api_key \
+    TF_VAR_confluent_cloud_api_secret \
+    TF_VAR_kafka_id \
+    TF_VAR_kafka_rest_endpoint \
+    TF_VAR_kafka_api_key \
+    TF_VAR_kafka_api_secret \
+    TF_VAR_schema_registry_id \
+    TF_VAR_schema_registry_crn \
+    TF_VAR_schema_registry_rest_endpoint \
+    TF_VAR_schema_registry_api_key \
+    TF_VAR_schema_registry_api_secret
+
+  (
+    cd "${SERVICE_REPO_PATH}/target/terraform/${artifact_id}"
+
+    unset TF_WORKSPACE
+    terraform init
+    terraform validate
+    terraform plan -out=tfplan
+    terraform show -no-color tfplan > tfplan.txt
+
+    if command -v jq >/dev/null 2>&1; then
+      terraform show -json tfplan | jq '{
+        format_version,
+        terraform_version,
+        resource_changes: [
+          .resource_changes[]? | {
+            address,
+            mode,
+            type,
+            name,
+            provider_name,
+            actions: .change.actions,
+            before_sensitive: (.change.before_sensitive // null),
+            after_sensitive: (.change.after_sensitive // null),
+            after_unknown: (.change.after_unknown // null)
           }
-        })
-    )
-  }' > tfplan.sanitized.json
-else
-  echo "jq not found; skipping tfplan.sanitized.json export" >&2
-fi
+        ],
+        output_changes: (
+          .output_changes
+          | to_entries
+          | map({
+              key,
+              value: {
+                actions: (.value.actions // []),
+                sensitive: (.value.sensitive // false)
+              }
+            })
+        )
+      }' > tfplan.sanitized.json
+    else
+      echo "jq not found; skipping tfplan.sanitized.json export" >&2
+    fi
 
-if [[ "$APPLY_MODE" == "true" ]]; then
-  terraform apply -auto-approve tfplan
-fi
+    if [[ "$APPLY_MODE" == "true" ]]; then
+      terraform apply -auto-approve tfplan
+    fi
 
-rm -f tfplan
+    rm -f tfplan
+  )
+done

@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Generate Terraform from one or more service AsyncAPI files (owned and/or
-# client contracts) and the shared pipeline overlays. Multiple generator runs
-# write into the same target folder so a single Terraform apply provisions
-# both owned topics/schemas and consumer ACLs/consumer groups together.
+# Generate Terraform from a single service AsyncAPI artifact (owned or client
+# contract) plus the shared pipeline overlays. Each artifact is provisioned
+# independently: one script run, one AsyncAPI file, one output folder, one
+# Terraform workspace.
 #
-# Run this script from the folder that ASYNCAPI_FILES/AVRO_IMPORTS are
-# relative to: a single service repo checkout, or the primary checkout when
-# combining files from more than one (reach into sibling checkouts with ../).
+# Run this script from the service repo checkout that ASYNCAPI_FILE/AVRO_IMPORTS
+# are relative to.
 
 PIPELINE_REPO_PATH="${1:?pipeline repo path is required}"
-ASYNCAPI_FILES="${2:?comma-separated asyncapi file path(s) is required}"
+ASYNCAPI_FILE="${2:?asyncapi file path is required}"
 SERVER="${3:?server is required}"
 SERVICE_REPO_NAME="${4:-$(basename "$(pwd)")}"
+ARTIFACT_ID="${5:?artifact id is required}"
 AVRO_IMPORTS_VALUE="${AVRO_IMPORTS:-}"
 TF_CLOUD_ORGANIZATION_VALUE="${TF_CLOUD_ORGANIZATION:-}"
 TF_WORKSPACE_VALUE="${PIPELINE_TF_WORKSPACE:-}"
@@ -30,6 +30,23 @@ copy_overlay_folder() {
   cp -R "$source_path"/. "$destination_path"/
 }
 
+# Like copy_overlay_folder, but shallow: does not recurse into subdirectories.
+# Used for the repo-wide overlay, whose own directory contains each artifact's
+# per-artifact overlay subfolder (terraform/services/{repo}/{artifactId}/) -
+# those must only be picked up by the artifact they belong to, never swept in
+# wholesale alongside a sibling artifact's files.
+copy_overlay_files() {
+  local source_path="$1"
+  local destination_path="$2"
+
+  if [[ ! -d "$source_path" ]]; then
+    return
+  fi
+
+  mkdir -p "$destination_path"
+  find "$source_path" -maxdepth 1 -type f -exec cp -t "$destination_path" {} +
+}
+
 render_cloud_config() {
   local template_path="$1"
   local output_path="$2"
@@ -38,7 +55,7 @@ render_cloud_config() {
     return
   fi
 
-  # A combined release bundle is built once and later applied to more than one
+  # A release bundle is built once and later applied to more than one
   # Terraform workspace (pre, then prod). When the target workspace isn't known
   # yet, leave cloud.tftpl in place for the promotion step to render instead of
   # failing here.
@@ -56,31 +73,23 @@ render_cloud_config() {
 
 resolved_service_repo_path="$(pwd)"
 resolved_pipeline_repo_path="$(cd "$PIPELINE_REPO_PATH" && pwd)"
-resolved_target_folder="${resolved_service_repo_path}/target/terraform"
+resolved_target_folder="${resolved_service_repo_path}/target/terraform/${ARTIFACT_ID}"
 service_repo_name="$SERVICE_REPO_NAME"
 
-IFS=',' read -r -a asyncapi_file_paths <<< "$ASYNCAPI_FILES"
-if [[ "${#asyncapi_file_paths[@]}" -eq 0 ]]; then
-  echo "At least one AsyncAPI file is required" >&2
+if [[ ! -f "$ASYNCAPI_FILE" ]]; then
+  echo "AsyncAPI file not found: $ASYNCAPI_FILE (relative to $resolved_service_repo_path)" >&2
   exit 1
 fi
-
-for asyncapi_file in "${asyncapi_file_paths[@]}"; do
-  if [[ ! -f "$asyncapi_file" ]]; then
-    echo "AsyncAPI file not found: $asyncapi_file (relative to $resolved_service_repo_path)" >&2
-    exit 1
-  fi
-done
 
 rm -rf "$resolved_target_folder"
 mkdir -p "$resolved_target_folder"
 
 generator_args=(
-  "apiFiles=$ASYNCAPI_FILES"
+  "apiFiles=$ASYNCAPI_FILE"
   "templates=TerraformConfluent"
   "serviceAccountMode=managed"
   "server=$SERVER"
-  "targetFolder=target/terraform"
+  "targetFolder=target/terraform/${ARTIFACT_ID}"
 )
 
 if [[ -n "$AVRO_IMPORTS_VALUE" ]]; then
@@ -93,9 +102,10 @@ fi
 jbang zw -p AsyncAPIOpsGeneratorPlugin "${generator_args[@]}"
 
 copy_overlay_folder "${resolved_pipeline_repo_path}/terraform/common" "$resolved_target_folder"
-copy_overlay_folder "${resolved_pipeline_repo_path}/terraform/services/${service_repo_name}" "$resolved_target_folder"
+copy_overlay_files "${resolved_pipeline_repo_path}/terraform/services/${service_repo_name}" "$resolved_target_folder"
+copy_overlay_folder "${resolved_pipeline_repo_path}/terraform/services/${service_repo_name}/${ARTIFACT_ID}" "$resolved_target_folder"
 render_cloud_config \
   "${resolved_target_folder}/cloud.tftpl" \
   "${resolved_target_folder}/cloud.tf"
 
-echo "Terraform generated in $resolved_target_folder from ${#asyncapi_file_paths[@]} AsyncAPI file(s)"
+echo "Terraform generated in $resolved_target_folder from $ASYNCAPI_FILE"

@@ -47,15 +47,58 @@ permissions:
   contents: read
 
 jobs:
+  resolve:
+    name: Resolve Kafka artifacts
+    runs-on: ubuntu-latest
+    outputs:
+      artifacts: ${{ steps.resolve.outputs.artifacts }}
+    steps:
+      - name: Checkout shared pipeline repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: arcadia-editions/api-product-workflows
+          ref: ${{ inputs.pipeline_ref }}
+          token: ${{ secrets.checkout_token || github.token }}
+          path: pipeline-repo
+
+      - name: Set up Java
+        uses: actions/setup-java@d7793b545071e98d581d3bf084a51c3213318a07 # v4
+        with:
+          distribution: ${{ inputs.java_distribution }}
+          java-version: ${{ inputs.java_version }}
+
+      - name: Set up JBang
+        uses: jbangdev/setup-jbang@cc28889678db839e29433f42f9ff25f148b6d8de # main
+        with:
+          version: 0.138.0
+
+      - name: Resolve AsyncAPI artifacts from the architecture manifest
+        id: resolve
+        shell: bash
+        env:
+          MANIFEST_URI: ${{ inputs.architecture_manifest_uri }}
+        run: |
+          repository="${{ inputs.service_repo }}"
+          inventory="$(jbang --quiet ./pipeline-repo/scripts/artifacts/ManifestTool.java list "$MANIFEST_URI" "$repository")"
+          artifacts="$(jq -c '[.[] | select(.type == "asyncapi" or .type == "asyncapi-client")]' <<< "$inventory")"
+          count="$(jq 'length' <<< "$artifacts")"
+          [[ "$count" -gt 0 ]] || { echo "no asyncapi or asyncapi-client artifact declared for $repository" >&2; exit 1; }
+          echo "artifacts=$artifacts" >> "$GITHUB_OUTPUT"
+
   plan:
     name: Generate and plan Terraform
+    needs: resolve
+    strategy:
+      fail-fast: false
+      matrix:
+        artifact: ${{ fromJson(needs.resolve.outputs.artifacts) }}
     runs-on: ubuntu-latest
     env:
       TF_IN_AUTOMATION: "true"
       TF_INPUT: "false"
       TF_CLOUD_ORGANIZATION: ${{ vars.TF_CLOUD_ORGANIZATION }}
       TF_TOKEN_app_terraform_io: ${{ secrets.TF_TOKEN_app_terraform_io }}
-      PIPELINE_TF_WORKSPACE: ${{ format('{0}-{1}', inputs.service_repo, inputs.server) }}
+      PIPELINE_TF_WORKSPACE: ${{ format('{0}-{1}-{2}', inputs.service_repo, matrix.artifact.artifactId, inputs.server) }}
       TF_VAR_confluent_cloud_api_key: ${{ secrets.CONFLUENT_CLOUD_API_KEY }}
       TF_VAR_confluent_cloud_api_secret: ${{ secrets.CONFLUENT_CLOUD_API_SECRET }}
       TF_VAR_kafka_id: ${{ vars.CONFLUENT_KAFKA_CLUSTER_ID }}
@@ -104,18 +147,6 @@ jobs:
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
 
-      - name: Resolve AsyncAPI artifacts from the architecture manifest
-        id: resolve
-        shell: bash
-        env:
-          MANIFEST_URI: ${{ inputs.architecture_manifest_uri }}
-        run: |
-          repository="${{ inputs.service_repo }}"
-          inventory="$(jbang --quiet ./pipeline-repo/scripts/artifacts/ManifestTool.java list "$MANIFEST_URI" "$repository")"
-          files="$(jq -r '[.[] | select(.type == "asyncapi" or .type == "asyncapi-client")] | map(.path) | join(",")' <<< "$inventory")"
-          [[ -n "$files" ]] || { echo "no asyncapi or asyncapi-client artifact declared for $repository" >&2; exit 1; }
-          echo "asyncapi_files=$files" >> "$GITHUB_OUTPUT"
-
       - name: Generate Terraform from AsyncAPI
         shell: bash
         run: |
@@ -123,9 +154,10 @@ jobs:
           cd service-repo
           ../pipeline-repo/scripts/terraform/provision-kafka.sh \
             ../pipeline-repo \
-            "${{ steps.resolve.outputs.asyncapi_files }}" \
+            "${{ matrix.artifact.path }}" \
             "${{ inputs.server }}" \
-            "${{ inputs.service_repo }}"
+            "${{ inputs.service_repo }}" \
+            "${{ matrix.artifact.artifactId }}"
 
       - name: Check Terraform inputs
         shell: bash
@@ -148,38 +180,38 @@ jobs:
             PIPELINE_TF_WORKSPACE
 
       - name: Terraform init
-        working-directory: service-repo/target/terraform
+        working-directory: service-repo/target/terraform/${{ matrix.artifact.artifactId }}
         run: |
           unset TF_WORKSPACE
           terraform init
 
       - name: Terraform validate
-        working-directory: service-repo/target/terraform
+        working-directory: service-repo/target/terraform/${{ matrix.artifact.artifactId }}
         run: |
           unset TF_WORKSPACE
           terraform validate
 
       - name: Terraform plan
-        working-directory: service-repo/target/terraform
+        working-directory: service-repo/target/terraform/${{ matrix.artifact.artifactId }}
         run: |
           unset TF_WORKSPACE
           terraform plan -out=tfplan
 
       - name: Export plan text
-        working-directory: service-repo/target/terraform
+        working-directory: service-repo/target/terraform/${{ matrix.artifact.artifactId }}
         run: terraform show -no-color tfplan > tfplan.txt
 
       - name: Remove raw Terraform plan
         if: always()
-        working-directory: service-repo/target/terraform
+        working-directory: service-repo/target/terraform/${{ matrix.artifact.artifactId }}
         run: rm -f tfplan
 
       - name: Upload generated Terraform
         if: ${{ inputs.upload_artifact }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: ${{ inputs.service_repo }}-terraform-plan
+          name: ${{ inputs.service_repo }}-${{ matrix.artifact.artifactId }}-terraform-plan
           path: |
-            service-repo/target/terraform
-            !service-repo/target/terraform/.terraform/**
+            service-repo/target/terraform/${{ matrix.artifact.artifactId }}
+            !service-repo/target/terraform/${{ matrix.artifact.artifactId }}/.terraform/**
           if-no-files-found: error
