@@ -74,7 +74,7 @@ class DslTool {
                 model = zdl;
                 problems = zdl.getProblems();
             } else {
-                ZflModel zfl = new ZflParser().parseModel(source);
+                ZflModel zfl = new ZflParser().parseModel(source, path.toString());
                 model = zfl;
                 problems = zfl.getProblems();
             }
