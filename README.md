@@ -138,7 +138,7 @@ The caller also maps:
 
 - `ARTIFACT_WORKFLOWS_CHECKOUT_TOKEN` for reading the shared workflow implementation when required.
 - `ARTIFACT_RELEASE_TOKEN` for pushing release branches, tags and pull requests.
-- `ARCHITECTURE_APP_TOKEN` for dispatching the manifest update.
+- `ARCHITECTURE_APP_TOKEN` for dispatching the manifest update. This org secret is visibility=selected; add each new `*-api` repository to its allowlist or the architecture-manifest step fails with an empty `GH_TOKEN`.
 
 These may be supplied as organization-level secrets shared with the API repositories. The release job uses the protected `artifact-releases` GitHub environment.
 

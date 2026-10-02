@@ -224,17 +224,22 @@ jobs:
 
       - name: Request architecture manifest update
         env:
-          ARCHITECTURE_TOKEN: ${{ secrets.architecture_token }}
+          GH_TOKEN: ${{ secrets.architecture_token }}
           PLAN: ${{ steps.preflight.outputs.plan }}
         shell: bash
         run: |
+          [[ -n "$GH_TOKEN" ]] || {
+            echo "architecture_token is empty; cannot dispatch artifact-released to $ARCHITECTURE_REPOSITORY" >&2
+            echo "Grant org secret ARCHITECTURE_APP_TOKEN to this repository (it is visibility=selected)." >&2
+            exit 1
+          }
           repository="${GITHUB_REPOSITORY#*/}"
           artifact_ids="$(jq -c '[.[].artifactId]' <<< "$PLAN")"
           jq -n \
             --arg repository "$repository" --arg artifactId "$ARTIFACT_ID" \
             --arg version "$RELEASE_VERSION" --argjson artifactIds "$artifact_ids" \
             '{event_type:"artifact-released",client_payload:{repository:$repository,artifactId:$artifactId,artifactIds:$artifactIds,version:$version}}' \
-            | GH_TOKEN="$ARCHITECTURE_TOKEN" gh api "repos/$ARCHITECTURE_REPOSITORY/dispatches" --input -
+            | gh api "repos/$ARCHITECTURE_REPOSITORY/dispatches" --input -
 
   release-kafka:
     name: Attach combined Terraform bundle
