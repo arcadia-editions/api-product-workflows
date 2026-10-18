@@ -1,5 +1,5 @@
 //REPOS central=https://repo.maven.apache.org/maven2/,central-snapshots=https://central.sonatype.com/repository/maven-snapshots/
-//DEPS io.zenwave360.dsl:dsl-kotlin-jvm:1.9.0-SNAPSHOT
+//DEPS io.zenwave360.dsl:dsl-kotlin-jvm:1.10.0
 
 import io.zenwave360.language.zdl.ZdlEditor;
 import io.zenwave360.language.zdl.ZdlModel;

@@ -1,5 +1,5 @@
 //REPOS central=https://repo.maven.apache.org/maven2/,central-snapshots=https://central.sonatype.com/repository/maven-snapshots/
-//DEPS io.zenwave360.jsonrefparser:json-schema-ref-parser-kmp-jvm:0.9.23
+//DEPS io.zenwave360.jsonrefparser:json-schema-ref-parser-kmp-jvm:0.9.24
 
 import io.zenwave360.jsonrefparser.JavaRefParser;
 import io.zenwave360.jsonrefparser.io.FileLoader;

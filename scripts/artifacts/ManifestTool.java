@@ -1,22 +1,22 @@
 //REPOS central=https://repo.maven.apache.org/maven2/,central-snapshots=https://central.sonatype.com/repository/maven-snapshots/
-//DEPS io.zenwave360.manifest:manifest-core-jvm:1.0.0-SNAPSHOT
+//DEPS io.zenwave360.architecture:architecture-manifest-jvm:0.9.5
 //DEPS org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.10.2
 //DEPS org.jetbrains.kotlin:kotlin-stdlib:2.3.0
 //DEPS org.jetbrains.kotlin:kotlin-stdlib-common:2.0.21
 
-import io.zenwave360.manifest.BlockingZenWaveManifestLoader;
-import io.zenwave360.manifest.BlockingZenWaveManifestEditor;
-import io.zenwave360.manifest.ManifestArtifactCatalog;
-import io.zenwave360.manifest.ManifestArtifactSelection;
-import io.zenwave360.manifest.ManifestArtifactSelector;
-import io.zenwave360.manifest.ManifestArtifactVersionUpdate;
-import io.zenwave360.manifest.ManifestDocumentTextUpdate;
-import io.zenwave360.manifest.ManifestScalarTarget;
-import io.zenwave360.manifest.ManifestScalarUpdate;
-import io.zenwave360.manifest.ManifestService;
-import io.zenwave360.manifest.ManifestValidation;
-import io.zenwave360.manifest.ResolvedManifestArtifact;
-import io.zenwave360.manifest.ZenWaveManifest;
+import io.zenwave360.architecture.manifest.BlockingZenWaveManifestLoader;
+import io.zenwave360.architecture.manifest.BlockingZenWaveManifestEditor;
+import io.zenwave360.architecture.manifest.ManifestArtifactCatalog;
+import io.zenwave360.architecture.manifest.ManifestArtifactSelection;
+import io.zenwave360.architecture.manifest.ManifestArtifactSelector;
+import io.zenwave360.architecture.manifest.ManifestArtifactVersionUpdate;
+import io.zenwave360.architecture.manifest.ManifestDocumentTextUpdate;
+import io.zenwave360.architecture.manifest.ManifestScalarTarget;
+import io.zenwave360.architecture.manifest.ManifestScalarUpdate;
+import io.zenwave360.architecture.manifest.ManifestService;
+import io.zenwave360.architecture.manifest.ManifestValidation;
+import io.zenwave360.architecture.manifest.ResolvedManifestArtifact;
+import io.zenwave360.architecture.manifest.ZenWaveManifest;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
