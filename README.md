@@ -158,6 +158,8 @@ Kafka/Schema Registry provisioning uses the same combined `asyncapi-all` release
 | Promote           | `provision-kafka-promote.yml`  | manual call for the combined AsyncAPI release                | the person running it - see below                 |
 | Destroy           | `provision-kafka-destroy.yml`  | manual call for the combined workspace                       | typing the exact workspace name - see below       |
 
+To run the same generation, plan and apply from your machine, see [Run Kafka provisioning on your laptop](docs/run-kafka-provisioning-locally.md).
+
 ### Plan and develop apply (no caller file needed)
 
 `artifact-ci.yml`'s `validate` job exposes whether the detected plan contains an `asyncapi-all` member. When true, two additional jobs run in the same workflow:

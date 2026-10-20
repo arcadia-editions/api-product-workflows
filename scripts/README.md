@@ -59,3 +59,40 @@ The service repository can also be passed explicitly before the environment:
 ```
 
 The explicit repository name must match the current directory.
+
+## Wipe a service environment
+
+To destroy all Terraform-managed resources for the service in the current
+directory and then delete its Terraform Cloud workspace, use:
+
+```bash
+cd ../orders-checkout-api
+../api-product-workflows/scripts/terraform/wipe-service-environment.sh
+```
+
+The environment defaults to `develop`. Pass another environment as the first
+argument when needed:
+
+```bash
+../api-product-workflows/scripts/terraform/wipe-service-environment.sh pre
+../api-product-workflows/scripts/terraform/wipe-service-environment.sh prod
+```
+
+The script asks for confirmation and deletes the Terraform Cloud workspace only
+after `terraform destroy` succeeds. For a non-interactive run, pass `--yes`:
+
+```bash
+../api-product-workflows/scripts/terraform/wipe-service-environment.sh prod --yes
+```
+
+The generated Terraform service account is destroyed with the other Terraform
+resources. The Confluent API key used to authenticate Terraform/CI is supplied
+through environment variables (`TF_VAR_*` and `.env.confluent-ci`); it is not an
+`api_key` resource in this generated configuration and is not deleted by this
+script. If the service-account deletion returns `403`, the Confluent identity
+running Terraform needs permission to delete it, or dependent resources/API
+keys must be handled first.
+
+Run this only from the service repository root. It derives the workspace name
+as `<current-folder>-<environment>` and does not remove resources outside that
+Terraform state.
