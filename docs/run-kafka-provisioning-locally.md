@@ -1,18 +1,29 @@
 # Run Kafka provisioning on your laptop
 
-One command reads two AsyncAPI files and turns them into a Terraform plan with 31 Confluent Cloud resources. Nobody writes that Terraform by hand. It is generated from the contract into `target/terraform`, and it is thrown away and rebuilt on every run.
+In an event-driven system, part of the API lives in the broker: partitions, retention, schema compatibility and ACLs. In Arcadia Editions we do not write those by hand in Terraform or in a console. The AsyncAPI definitions are the source of truth for provisioning the Kafka platform and registering schemas, and the Terraform is generated from them on every run.
 
-The idea behind it is simple. In an event driven system, part of the API lives in the broker. Partitions shape ordering, retention decides how far back a consumer can replay, schema compatibility decides how producers and consumers evolve, and ACLs decide who may talk to whom. When those things are written only in Terraform or in a console, they slowly drift away from the contract. So we write them once, in AsyncAPI, and let the platform follow.
+These workflows run in GitHub pipelines. This guide helps you set up your local environment so you can replicate the same workflows on your laptop, against a real Confluent Cloud cluster, using [orders-checkout-api](https://github.com/arcadia-editions/orders-checkout-api) as the example.
 
-This guide runs the whole thing from your machine against a real Confluent Cloud cluster, with [orders-checkout-api](https://github.com/arcadia-editions/orders-checkout-api) as the example. CI runs the same script, so what you see here is what the pipeline does.
+In this guide you will find:
 
-1. [What gets provisioned, and what does not](#what-gets-provisioned-and-what-does-not)
-2. [Before you start](#before-you-start)
-3. [Reading the contract](#reading-the-contract)
-4. [Generate and plan](#generate-and-plan)
-5. [Check what the platform says](#check-what-the-platform-says)
-6. [Change the contract, read the plan](#change-the-contract-read-the-plan)
-7. [The same run, in GitHub Actions](#the-same-run-in-github-actions)
+- [Run Kafka provisioning on your laptop](#run-kafka-provisioning-on-your-laptop)
+  - [What gets provisioned, and what does not](#what-gets-provisioned-and-what-does-not)
+  - [Before you start](#before-you-start)
+    - [Bootstrap Confluent once](#bootstrap-confluent-once)
+  - [Reading the contract](#reading-the-contract)
+    - [The channel becomes a topic](#the-channel-becomes-a-topic)
+    - [The message becomes a schema subject](#the-message-becomes-a-schema-subject)
+    - [The operation becomes an ACL](#the-operation-becomes-an-acl)
+    - [The client file only asks for access](#the-client-file-only-asks-for-access)
+  - [Generate and plan](#generate-and-plan)
+    - [Apply](#apply)
+  - [Check what the platform says](#check-what-the-platform-says)
+  - [Change the contract, read the plan](#change-the-contract-read-the-plan)
+    - [A config change](#a-config-change)
+    - [A new consumer](#a-new-consumer)
+    - [Drift from the other side](#drift-from-the-other-side)
+    - [Clean up](#clean-up)
+  - [The same run, in GitHub Actions](#the-same-run-in-github-actions)
 
 ## What gets provisioned, and what does not
 
@@ -24,7 +35,7 @@ This guide runs the whole thing from your machine against a real Confluent Cloud
 | --- | --- | --- |
 | Kafka topic, with partitions and config | Created, 4 topics | Not created |
 | Schema subject in Schema Registry | Registered, 4 subjects | Not registered |
-| Subject compatibility level | Set to `BACKWARD` | Not touched |
+| Subject compatibility level | Set to `FORWARD` | Not touched |
 | Topic ACLs | `WRITE` and `DESCRIBE` per `send` operation | `READ` and `DESCRIBE` per `receive` operation |
 | Schema Registry access | `DeveloperRead` role binding per subject | `DeveloperRead` role binding per subject |
 | Service account for the principal | Created once, `orders_checkout` | Shared with the owned side |
@@ -120,13 +131,12 @@ Each message points to an Avro file and carries a trait with its Schema Registry
 KafkaSchemaCompatibility:
   bindings:
     kafka:
-      bindingVersion: '0.5.0'
       schemaIdLocation: 'payload'
       schemaLookupStrategy: 'TopicNameStrategy'
-      x-compatibility: 'BACKWARD'
+      x-compatibility: 'FORWARD'
 ```
 
-The generator registers `avro/OrderCreated.avsc` under the subject `orders-checkout.order-created.event.avro.v1-OrderCreatedEvent-value` and sets its compatibility level to `BACKWARD`. With `BACKWARD`, a new version of the schema must still read data written with the old one.
+The generator registers `avro/OrderCreated.avsc` under the subject `orders-checkout.order-created.event.avro.v1-OrderCreatedEvent-value` and sets its compatibility level to `FORWARD`. With `FORWARD`, old consumers still can read messages from newer versions, allowing producers to rollout first.
 
 ### The operation becomes an ACL
 
@@ -312,7 +322,7 @@ Destroy first, then delete the HCP Terraform workspace if you want a clean slate
 
 The local script is a thin wrapper around [`provision-kafka.sh`](../scripts/terraform/provision-kafka.sh), and the pipeline calls exactly the same file.
 
-In daily work nobody provisions by hand. The service's normal `artifact-ci.yml` calls the shared [`artifact-ci.yml`](../.github/workflows/artifact-ci.yml), and when an AsyncAPI contract changes it plans on every push and pull request with [`provision-kafka-plan.yml`](../.github/workflows/provision-kafka-plan.yml), and applies on every push to `develop` with [`provision-kafka-develop.yml`](../.github/workflows/provision-kafka-develop.yml). That workflow:
+Ideally you never run this by hand. Create a pull request to `develop` with a change in one of the AsyncAPI contracts and the pipeline shows you the Terraform plan; merge it, and the pipeline applies it to the platform. The service's normal `artifact-ci.yml` calls the shared [`artifact-ci.yml`](../.github/workflows/artifact-ci.yml), and when an AsyncAPI contract changes it plans on every pull request and push with [`provision-kafka-plan.yml`](../.github/workflows/provision-kafka-plan.yml), and applies on every push to `develop` with [`provision-kafka-develop.yml`](../.github/workflows/provision-kafka-develop.yml). That workflow:
 
 1. Checks out the `develop` branch of the service repository and this pipeline repository side by side.
 2. Installs Java 21, JBang, the ZenWave CLI alias and Terraform.
@@ -324,7 +334,7 @@ In daily work nobody provisions by hand. The service's normal `artifact-ci.yml` 
 
 The credentials come from the GitHub secrets and variables that `bootstrap-confluent-ci.sh --github-secrets` wrote for you. CI also sets `TF_VAR_provisioned_from` to `develop@<commit sha>`, so the workspace output tells you which commit the platform came from.
 
-When you want to provision without a commit, each service also has a small manual entry point, [`orders-checkout-api/.github/workflows/provision-kafka.yml`](https://github.com/arcadia-editions/orders-checkout-api/blob/main/.github/workflows/provision-kafka.yml):
+You can also trigger it without a commit. Each service has a small manual entry point, [`orders-checkout-api/.github/workflows/provision-kafka.yml`](https://github.com/arcadia-editions/orders-checkout-api/blob/main/.github/workflows/provision-kafka.yml), that you can start from the Actions tab or with the GitHub CLI:
 
 ```bash
 gh workflow run provision-kafka.yml --repo arcadia-editions/orders-checkout-api
