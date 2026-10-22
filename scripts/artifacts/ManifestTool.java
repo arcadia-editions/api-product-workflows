@@ -1,6 +1,6 @@
 //REPOS central=https://repo.maven.apache.org/maven2/,central-snapshots=https://central.sonatype.com/repository/maven-snapshots/
 //DEPS io.zenwave360.architecture:architecture-manifest-jvm:0.9.5
-// kotlin-stdlib-common has no jar for Kotlin 2.x on Central; pin the last version that ships one so transitive resolution succeeds
+// kotlin-stdlib-common 2.3.0 (pulled transitively) has no jar on Central; pin the last version that ships one
 //DEPS org.jetbrains.kotlin:kotlin-stdlib-common:2.0.21
 
 import io.zenwave360.architecture.manifest.BlockingZenWaveManifestLoader;
