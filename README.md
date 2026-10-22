@@ -271,6 +271,30 @@ Useful options:
 - `--print`: print exports to stdout.
 - `--dry-run`: show intended actions without creating resources or writing secrets.
 
+## Bootstrapping the Terraform Cloud CI configuration
+
+Use `scripts/terraform/bootstrap-terraform-cloud-ci.sh` to store `TF_CLOUD_ORGANIZATION` and `TF_TOKEN_app_terraform_io` from what is already on disk. It reads `.env.terraform-cloud`, then the current environment, then the token saved by `terraform login`, and verifies the token against the organization before writing `.env.terraform-cloud` or GitHub configuration.
+
+Prerequisites:
+
+- `curl` and `jq`.
+- A Terraform Cloud token in `.env.terraform-cloud`, the environment, or from `terraform login`.
+- `gh` authenticated with `gh auth login` when using `--github-secrets`.
+
+```bash
+./scripts/terraform/bootstrap-terraform-cloud-ci.sh --github-secrets
+source .env.terraform-cloud
+```
+
+Useful options:
+
+- `--tf-organization name`: Terraform Cloud organization, when it is not already in `.env.terraform-cloud` or the environment.
+- `--env-file path`: env file to read and write; defaults to `.env.terraform-cloud`.
+- `--github-secrets`: store `TF_TOKEN_app_terraform_io` as a secret and `TF_CLOUD_ORGANIZATION` as a variable with GitHub CLI.
+- `--repo owner/repo` / `--org org-slug`: where to store GitHub configuration; defaults to the `arcadia-editions` organization.
+- `--print`: print exports to stdout.
+- `--dry-run`: show intended actions without writing files or secrets.
+
 ## Implementation layout
 
 - `.github/workflows/artifact-ci.yml`: reusable changed-artifact validation.
