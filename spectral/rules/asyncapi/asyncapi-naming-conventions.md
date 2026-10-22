@@ -348,7 +348,8 @@ payments.processing.payments-processing.application.__.orders-checkout.order-cre
 ```
 
 The reserved `__` separator makes the consumption relationship explicit. Since the
-template uses `${groupId}`, the Kafka binding must define `groupId` or `x-groupId`.
+template uses `${groupId}`, the Kafka binding (on the operation or one of its operation traits) must define
+`groupId` or `x-groupId`.
 
 ### Error Topic Declaration
 

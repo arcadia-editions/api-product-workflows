@@ -1,4 +1,4 @@
-const { KEBAB_CASE, child, createRule, forEachValidOperation, hasOwn, isPositiveInteger } = require('./asyncapiUtils.js');
+const { KEBAB_CASE, child, createRule, forEachValidOperation, getLocalRefName, hasOwn, isPositiveInteger } = require('./asyncapiUtils.js');
 
 const ERROR_TOPIC_TEMPLATE = '${groupId}.__.${channel.address}.${suffix}';
 const ERROR_TOPIC_FIELDS = new Set(['addressTemplate', 'retryTopics', 'retrySuffixes', 'retry', 'dlq']);
@@ -41,9 +41,9 @@ function validateErrorTopics(document, operation, kafka, errorTopicsPath, report
     report(`x-error-topics.addressTemplate must be "${ERROR_TOPIC_TEMPLATE}".`, child(errorTopicsPath, 'addressTemplate'));
   }
 
-  if (errorTopics.addressTemplate?.includes('${groupId}') && !hasOwn(kafka, 'groupId') && !hasOwn(kafka, 'x-groupId')) {
+  if (errorTopics.addressTemplate?.includes('${groupId}') && !operationDefinesGroupId(document, operation)) {
     report(
-      'x-error-topics.addressTemplate uses ${groupId}, so bindings.kafka must define groupId or x-groupId.',
+      'x-error-topics.addressTemplate uses ${groupId}, so bindings.kafka (on the operation or one of its traits) must define groupId or x-groupId.',
       child(errorTopicsPath, 'addressTemplate')
     );
   }
@@ -71,6 +71,33 @@ function validateErrorTopics(document, operation, kafka, errorTopicsPath, report
   if (hasOwn(errorTopics, 'dlq')) {
     validatePlan(document, errorTopics.dlq, child(errorTopicsPath, 'dlq'), 'dlq', report);
   }
+}
+
+// groupId may come from the operation binding itself or from any of its operation traits.
+// Traits that cannot be resolved locally (external $refs) are assumed to provide it.
+function operationDefinesGroupId(document, operation) {
+  const definesGroupId = (kafka) => hasOwn(kafka, 'groupId') || hasOwn(kafka, 'x-groupId');
+  if (definesGroupId(operation.bindings?.kafka)) {
+    return true;
+  }
+
+  const traits = Array.isArray(operation.traits) ? operation.traits : [];
+  return traits.some((trait) => {
+    let resolved = trait;
+    if (typeof trait?.$ref === 'string') {
+      const traitId = getLocalRefName(trait.$ref, 'components/operationTraits');
+      if (!traitId) {
+        return true;
+      }
+      resolved = document.components?.operationTraits?.[traitId];
+    }
+
+    if (typeof resolved?.$ref === 'string') {
+      return true;
+    }
+
+    return definesGroupId(resolved?.bindings?.kafka);
+  });
 }
 
 function validateReusablePlans(document, plansPath, report) {
