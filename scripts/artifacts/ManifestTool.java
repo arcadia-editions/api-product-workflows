@@ -1,6 +1,5 @@
 //REPOS central=https://repo.maven.apache.org/maven2/,central-snapshots=https://central.sonatype.com/repository/maven-snapshots/
 //DEPS io.zenwave360.architecture:architecture-manifest-jvm:0.9.5
-//DEPS org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.10.2
 //DEPS org.jetbrains.kotlin:kotlin-stdlib:2.3.0
 //DEPS org.jetbrains.kotlin:kotlin-stdlib-common:2.0.21
 
