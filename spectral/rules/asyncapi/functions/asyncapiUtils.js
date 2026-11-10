@@ -136,6 +136,30 @@ function pascalCase(value) {
     .join('');
 }
 
+// Command and Response are valid message-type suffixes on every channel, in
+// addition to the channel's own type (for example Event).
+const EXTRA_MESSAGE_TYPE_SUFFIXES = ['Command', 'Response'];
+
+function messageTypeSuffixes(messageType) {
+  return [...new Set(['', pascalCase(messageType), ...EXTRA_MESSAGE_TYPE_SUFFIXES])];
+}
+
+function namesWithTypeSuffixes(messageName, messageType) {
+  return messageTypeSuffixes(messageType).map((suffix) => `${messageName}${suffix}`);
+}
+
+function messageKeyAllowed(messageKey, messageName, messageType) {
+  return (
+    namesWithTypeSuffixes(messageName, messageType).includes(messageKey) ||
+    /(?:Command|Response)$/.test(messageKey)
+  );
+}
+
+function messageKeyStems(messageKey) {
+  const stripped = messageKey.replace(/(?:Input)?(?:Event|Command|Response)$/, '');
+  return stripped && stripped !== messageKey ? [messageKey, stripped] : [messageKey];
+}
+
 function child(path, segment) {
   return path.concat(Array.isArray(segment) ? segment : [segment]);
 }
@@ -168,6 +192,9 @@ module.exports = {
   getSourcePath,
   hasOwn,
   isPositiveInteger,
+  messageKeyAllowed,
+  messageKeyStems,
+  namesWithTypeSuffixes,
   parseAsyncApiId,
   parseTopicAddress,
   pascalCase,

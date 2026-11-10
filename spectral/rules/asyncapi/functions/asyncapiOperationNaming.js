@@ -1,4 +1,13 @@
-const { child, createRule, getChannelIdentity, getLocalRefName, getOperationPrefix, pascalCase } = require('./asyncapiUtils.js');
+const {
+  child,
+  createRule,
+  getChannelIdentity,
+  getLocalRefName,
+  getOperationPrefix,
+  messageKeyStems,
+  namesWithTypeSuffixes,
+  pascalCase,
+} = require('./asyncapiUtils.js');
 
 module.exports = createRule((document, path, report) => {
   const operations = document.operations;
@@ -33,13 +42,19 @@ module.exports = createRule((document, path, report) => {
 
     const prefix = getOperationPrefix(operation.action, isClientSpec);
     const messageName = pascalCase(channelIdentity.messageName);
-    const messageType = pascalCase(channelIdentity.messageType);
     const versionSuffix = channelIdentity.version ? pascalCase(channelIdentity.version) : '';
-    const operationIdWithType = `${prefix}${messageName}${messageType}`;
-    const operationIdWithoutType = `${prefix}${messageName}`;
-    const accepted = [operationIdWithType, operationIdWithoutType];
-    if (versionSuffix) {
-      accepted.push(`${operationIdWithType}${versionSuffix}`, `${operationIdWithoutType}${versionSuffix}`);
+    const stems = new Set(namesWithTypeSuffixes(messageName, channelIdentity.messageType));
+    for (const messageKey of Object.keys(document.channels?.[channelId]?.messages ?? {})) {
+      for (const stem of messageKeyStems(messageKey)) {
+        stems.add(stem);
+      }
+    }
+    const accepted = [];
+    for (const stem of stems) {
+      accepted.push(`${prefix}${stem}`);
+      if (versionSuffix) {
+        accepted.push(`${prefix}${stem}${versionSuffix}`);
+      }
     }
 
     if (!accepted.includes(operationId)) {
