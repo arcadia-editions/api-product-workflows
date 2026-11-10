@@ -74,11 +74,11 @@ function getLocalRefName(ref, collectionName) {
 function getChannelIdentity(channelId, channel) {
   const topic = parseTopicAddress(channel?.address);
   if (topic) {
-    return { messageName: topic.messageName, messageType: topic.messageType };
+    return { messageName: topic.messageName, messageType: topic.messageType, version: topic.version };
   }
 
   const match = channelId.match(/^(.+)-(event|command|response|callback|cdc)-(v[0-9]+)$/);
-  return match ? { messageName: match[1], messageType: match[2] } : undefined;
+  return match ? { messageName: match[1], messageType: match[2], version: match[3] } : undefined;
 }
 
 function forEachInlineChannel(document, callback) {

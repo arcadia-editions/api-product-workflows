@@ -34,12 +34,17 @@ module.exports = createRule((document, path, report) => {
     const prefix = getOperationPrefix(operation.action, isClientSpec);
     const messageName = pascalCase(channelIdentity.messageName);
     const messageType = pascalCase(channelIdentity.messageType);
+    const versionSuffix = channelIdentity.version ? pascalCase(channelIdentity.version) : '';
     const operationIdWithType = `${prefix}${messageName}${messageType}`;
     const operationIdWithoutType = `${prefix}${messageName}`;
+    const accepted = [operationIdWithType, operationIdWithoutType];
+    if (versionSuffix) {
+      accepted.push(`${operationIdWithType}${versionSuffix}`, `${operationIdWithoutType}${versionSuffix}`);
+    }
 
-    if (operationId !== operationIdWithType && operationId !== operationIdWithoutType) {
+    if (!accepted.includes(operationId)) {
       report(
-        `Operation id "${operationId}" must be "${operationIdWithType}" or "${operationIdWithoutType}" for "${channelIdentity.messageName}-${channelIdentity.messageType}".`,
+        `Operation id "${operationId}" must be ${accepted.map((id) => `"${id}"`).join(' or ')} for "${channelIdentity.messageName}-${channelIdentity.messageType}".`,
         operationPath
       );
     }

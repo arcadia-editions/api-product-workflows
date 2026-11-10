@@ -210,7 +210,9 @@ channel:
 
 Operation ids are derived from the channel message identity. The `<MessageType>`
 suffix is optional in every case below, so both forms are valid for the same
-operation.
+operation. When the channel id or topic address includes a version such as
+`v1`, that version may also be appended in PascalCase (`V1`). A different
+version is still rejected.
 
 ### Provider Operations
 
@@ -225,7 +227,9 @@ Examples:
 
 ```text
 onOrderCreatedEvent / onOrderCreated
+onOrderCreatedEventV1 / onOrderCreatedV1
 doAuthorizePaymentCommand / doAuthorizePayment
+doAuthorizePaymentCommandV1 / doAuthorizePaymentV1
 ```
 
 ### Client Operations
@@ -242,7 +246,9 @@ Examples:
 
 ```text
 doAuthorizePaymentCommand / doAuthorizePayment
+doAuthorizePaymentCommandV1 / doAuthorizePaymentV1
 onPaymentAuthorizedEvent / onPaymentAuthorized
+onPaymentAuthorizedEventV1 / onPaymentAuthorizedV1
 ```
 
 The deterministic operation names are useful for consistent generated code across
