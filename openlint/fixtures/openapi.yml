@@ -1,0 +1,11 @@
+openapi: 3.0.3
+info:
+  title: Fixture
+  version: 0.0.1
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      responses:
+        "200":
+          description: OK

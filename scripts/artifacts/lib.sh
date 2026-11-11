@@ -5,7 +5,6 @@ set -o pipefail
 readonly ARCADIA_ARTIFACT_TYPES=(zdl zfl openapi asyncapi asyncapi-client)
 readonly ARCADIA_ARTIFACTS_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly ARCADIA_SPECTRAL_CLI_VERSION="6.15.0"
-readonly ARCADIA_ASYNCAPI_CLI_VERSION="3.4.0"
 readonly ARCADIA_REDOCLY_CLI_VERSION="1.34.5"
 readonly ARCADIA_APICURIO_PLUGIN_VERSION="3.2.2"
 readonly ARCADIA_MAVEN_DEPLOY_PLUGIN_VERSION="3.1.4"
@@ -13,6 +12,17 @@ readonly ARCADIA_MAVEN_DEPLOY_PLUGIN_VERSION="3.1.4"
 arcadia_die() {
   echo "error: $*" >&2
   exit 1
+}
+
+# Binaries come from tools/package-lock.json. Install with:
+#   npm ci --ignore-scripts --prefix tools
+arcadia_locked_cli() {
+  local name="${1:?CLI name is required}"
+  local root bin
+  root="$(cd "$ARCADIA_ARTIFACTS_SCRIPT_DIR/../.." && pwd)"
+  bin="$root/tools/node_modules/.bin/$name"
+  [[ -f "$bin" ]] || arcadia_die "locked CLI '$name' is missing at $bin. Run npm ci --ignore-scripts in tools/."
+  printf '%s\n' "$bin"
 }
 
 arcadia_require_command() {

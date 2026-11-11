@@ -1,0 +1,6 @@
+{
+  "type": "record",
+  "name": "ProductPublishedEvent",
+  "namespace": "com.arcadiaeditions.catalog.products",
+  "fields": []
+}
