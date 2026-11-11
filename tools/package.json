@@ -3,7 +3,7 @@
   "private": true,
   "description": "Pinned CLIs for artifact validation. This file is the version source of truth.",
   "dependencies": {
-    "@asyncapi/cli": "3.4.0",
+    "@asyncapi/cli": "6.3.0",
     "openlint": "1.1.3"
   }
 }
