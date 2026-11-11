@@ -1,0 +1,19 @@
+asyncapi: 3.1.0
+id: urn:com.arcadiaeditions:catalog:products:asyncapi
+info:
+  title: Catalog products fixture
+  version: 0.0.1
+channels:
+  product-published-event-v1:
+    address: catalog-products.product-published.event.avro.v1
+    x-visibility: global
+    messages:
+      ProductPublishedEvent:
+        payload:
+          schema:
+            $ref: ./avro/v1/ProductPublishedEvent.avsc
+operations:
+  onProductPublishedEventV1:
+    action: send
+    channel:
+      $ref: "#/channels/product-published-event-v1"

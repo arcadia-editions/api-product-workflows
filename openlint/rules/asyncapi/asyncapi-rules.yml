@@ -1,0 +1,95 @@
+formats:
+  - aas3
+
+functionsDir: ./functions
+
+functions:
+  - asyncapiServiceIdentity
+  - asyncapiTopicNaming
+  - asyncapiMessageSchemaNaming
+  - asyncapiOperationNaming
+  - asyncapiVisibility
+  - asyncapiKafkaBindings
+  - asyncapiSchemaRegistry
+  - asyncapiErrorTopics
+
+rules:
+  asyncapi-service-identity:
+    description: Enforce the Arcadia Editions AsyncAPI service identity and provider folder path.
+    message: '(EDA-INF-001) {{error}}'
+    severity: error
+    recommended: true
+    resolved: false
+    given: $
+    then:
+      function: asyncapiServiceIdentity
+
+  asyncapi-topic-naming:
+    description: Enforce Kafka topic, channel id, and client channel reference conventions.
+    message: '(EDA-TOP-001) {{error}}'
+    severity: error
+    recommended: true
+    resolved: false
+    given: $
+    then:
+      function: asyncapiTopicNaming
+
+  asyncapi-message-schema-naming:
+    description: Enforce channel message key and Avro schema path conventions.
+    message: '(EDA-MSG-001) {{error}}'
+    severity: error
+    recommended: true
+    resolved: false
+    given: $
+    then:
+      function: asyncapiMessageSchemaNaming
+
+  asyncapi-operation-naming:
+    description: Enforce provider and client AsyncAPI operation conventions.
+    message: '(EDA-OPR-001) {{error}}'
+    severity: error
+    recommended: true
+    resolved: false
+    given: $
+    then:
+      function: asyncapiOperationNaming
+
+  asyncapi-visibility:
+    description: Enforce channel visibility and target audience conventions.
+    message: '(EDA-VIS-001) {{error}}'
+    severity: error
+    recommended: true
+    resolved: false
+    given: $
+    then:
+      function: asyncapiVisibility
+
+  asyncapi-kafka-bindings:
+    description: Enforce Kafka principal and consumer group naming conventions.
+    message: '(EDA-KFK-001) {{error}}'
+    severity: error
+    recommended: true
+    resolved: false
+    given: $
+    then:
+      function: asyncapiKafkaBindings
+
+  asyncapi-schema-registry:
+    description: Enforce Schema Registry conventions for channels and message traits.
+    message: '(EDA-SCH-001) {{error}}'
+    severity: error
+    recommended: true
+    resolved: false
+    given: $
+    then:
+      function: asyncapiSchemaRegistry
+
+  asyncapi-error-topics:
+    description: Enforce retry and dead-letter topic conventions.
+    message: '(EDA-ERR-001) {{error}}'
+    severity: error
+    recommended: true
+    resolved: false
+    given: $
+    then:
+      function: asyncapiErrorTopics

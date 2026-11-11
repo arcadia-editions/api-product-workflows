@@ -32,7 +32,7 @@ case "$type" in
     spectral
     ;;
   asyncapi|asyncapi-client)
-    npx --yes "@asyncapi/cli@$ARCADIA_ASYNCAPI_CLI_VERSION" validate "$file"
+    "$(arcadia_locked_cli asyncapi)" validate "$file"
     spectral
     if [[ "$type" == "asyncapi" ]]; then
       while IFS= read -r referenced; do

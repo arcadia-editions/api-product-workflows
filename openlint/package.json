@@ -1,0 +1,15 @@
+{
+  "name": "arcadia-editions-openlint-rules",
+  "private": true,
+  "scripts": {
+    "bundle": "node scripts/bundle-openlint.js",
+    "verify:bundle": "node scripts/verify-bundle.js",
+    "lint:fixtures": "node scripts/lint-fixtures.js",
+    "serve:dist": "node scripts/serve-dist.js"
+  },
+  "devDependencies": {
+    "@openlint/openlint-ruleset-migrator": "0.1.0",
+    "@openlint/openlint-rulesets": "0.1.0",
+    "esbuild": "0.28.2"
+  }
+}

@@ -1,0 +1,430 @@
+# AsyncAPI Conventions Enforced by OpenLint
+
+The central governance principle is that asynchronous APIs are cataloged using
+Arcadia Editions domain, subdomain, and service identifiers, documented with
+AsyncAPI, and owned by the provider of the functionality:
+
+- For an event, the provider is the producer.
+- For a command, the provider is the consumer that implements the requested action.
+- Client specifications reference provider channels instead of redefining them.
+
+## OpenLint Ruleset
+
+The root `openlint-rules.yml` enables the custom policy rules declared in
+`asyncapi-rules.yml`. It does not extend the built-in AsyncAPI recommended ruleset.
+
+| Rule | Purpose |
+| --- | --- |
+| `asyncapi-service-identity` | Validate the Arcadia domain/subdomain/service id and provider folder path. |
+| `asyncapi-topic-naming` | Validate Kafka topic addresses, channel ids, and client references. |
+| `asyncapi-message-schema-naming` | Validate channel message keys and Avro schema paths. |
+| `asyncapi-operation-naming` | Validate provider and client operation conventions. |
+| `asyncapi-visibility` | Validate visibility and target audience declarations. |
+| `asyncapi-kafka-bindings` | Validate Kafka principal and consumer group names. |
+| `asyncapi-schema-registry` | Validate Schema Registry settings. |
+| `asyncapi-error-topics` | Validate retry and dead-letter topic declarations. |
+
+Each custom policy is independently configurable. Shared parsing and reporting
+helpers live in `rules/asyncapi/functions/asyncapiUtils.js`.
+
+## Arcadia Service Identity
+
+### AsyncAPI Id
+
+Every provider AsyncAPI document must declare its Arcadia service identity with
+the Java-style company namespace and `:asyncapi` suffix:
+
+```text
+urn:com.arcadiaeditions:<domain>:<subdomain>:asyncapi
+```
+
+Client documents append `:client` after the AsyncAPI suffix:
+
+```text
+urn:com.arcadiaeditions:<domain>:<subdomain>:asyncapi:client
+```
+
+Example:
+
+```yaml
+id: urn:com.arcadiaeditions:orders:checkout:asyncapi
+```
+
+The corresponding service model id omits the AsyncAPI suffix:
+
+```zdl
+id "urn:com.arcadiaeditions:orders:checkout"
+```
+
+The domain and subdomain remain in the catalog identity even when runtime Kafka
+topic names use the service identifier as their leading segment. This keeps
+technical names concise while preserving the full service classification in
+AsyncAPI metadata.
+
+### Provider Folder Path
+
+Provider specifications named `asyncapi.yml` must live under:
+
+```text
+<service>-api/asyncapi.yml
+```
+
+Example:
+
+```text
+orders-checkout-api/asyncapi.yml
+```
+
+This aligns the repository layout with the Arcadia service catalog identity.
+
+## Kafka Topics
+
+### Topic Address
+
+Provider channel addresses must follow:
+
+```text
+<service>.<message-name>.<message-type>.<content-type>.<version>
+```
+
+Example:
+
+```text
+orders-checkout.order-created.event.avro.v1
+```
+
+| Segment | Enforced format |
+| --- | --- |
+| `<service>` | kebab-case Arcadia service, derived as `<domain>-<subdomain>` from the AsyncAPI id |
+| `<message-name>` | kebab-case message name |
+| `<message-type>` | `event`, `command`, `response`, `callback`, or `cdc` |
+| `<content-type>` | `avro` or `json` |
+| `<version>` | `v<N>`, such as `v0` or `v1` |
+
+For provider documents, `<service>` must match the service name derived by joining
+the domain and subdomain segments in the AsyncAPI `id` with a hyphen.
+
+The environment is intentionally absent from the address. The governance process
+assumes separate environments, so embedding `int`, `pre`, `uat`, or `pro` in topic
+names would add noise and complicate provisioning.
+
+### Channel Id
+
+The key under `channels` must use:
+
+```text
+<message-name>-<message-type>-<version>
+```
+
+Example:
+
+```yaml
+channels:
+  order-created-event-v1:
+    address: orders-checkout.order-created.event.avro.v1
+```
+
+This makes the AsyncAPI channel id deterministic from the Kafka topic identity.
+
+### Client Channel References
+
+Channels in `asyncapi-client.yml` must use `$ref` instead of defining provider topics
+inline:
+
+```yaml
+channels:
+  payment-authorized-event-v1:
+    $ref: '../payments-processing-api/asyncapi.yml#/channels/payment-authorized-event-v1'
+```
+
+Only provider specifications provision topics and schemas. Client specifications
+document consumption or command invocation without duplicating ownership.
+
+## Messages And Schemas
+
+### Channel Message Key
+
+The key under `channels.<channel-id>.messages` must be the channel message name
+with an optional type suffix. The channel's own type is allowed, and `Command`
+and `Response` are allowed on every channel:
+
+```text
+<MessageName><MessageType>
+<MessageName>Command
+<MessageName>Response
+<MessageName>
+```
+
+A key that ends in `Command` or `Response` is also valid when the channel carries
+a command or response whose name is not the channel message name, such as
+`AuthorizePaymentInputCommand` on `payment-retried-event-v1`.
+
+The value is generated by converting the kebab-case message name (and, optionally,
+the message type) to PascalCase. The type suffix is optional, so every form is
+valid for the same channel.
+
+Examples:
+
+```yaml
+channels:
+  authorize-payment-command-v1:
+    messages:
+      AuthorizePaymentCommand:
+        payload:
+          schema:
+            $ref: './avro/v1/AuthorizePaymentCommand.avsc'
+```
+
+```yaml
+channels:
+  authorize-payment-command-v1:
+    messages:
+      AuthorizePayment:
+        payload:
+          schema:
+            $ref: './avro/v1/AuthorizePayment.avsc'
+```
+
+### Avro Schema Path
+
+When a channel message directly declares an Avro schema `$ref`, its path must match
+the same message key used above, with or without the message type suffix:
+
+```text
+./avro/v<N>/<MessageName><MessageType>.avsc
+./avro/v<N>/<MessageName>.avsc
+```
+
+Examples:
+
+```text
+./avro/v1/AuthorizePaymentCommand.avsc
+./avro/v1/AuthorizePayment.avsc
+```
+
+The deterministic filename keeps schemas easy to find and supports automated Schema
+Registry provisioning from AsyncAPI and Avro files.
+
+## Operations
+
+Operations must use `action: send` or `action: receive`, and their channel must be a
+local reference:
+
+```yaml
+channel:
+  $ref: '#/channels/<channel-id>'
+```
+
+Operation ids are derived from the channel message identity or from a message
+key on that channel. The channel type, `Command`, and `Response` are optional
+suffixes, and a trailing `Input` before that suffix is ignored, so
+`doAuthorizePayment` matches the message key `AuthorizePaymentInputCommand`.
+When the channel id or topic address includes a version such as `v1`, that
+version may also be appended in PascalCase (`V1`). A different version is still
+rejected.
+
+### Provider Operations
+
+For `asyncapi.yml`:
+
+| Action | Operation id |
+| --- | --- |
+| `send` | `on<MessageName><MessageType>` or `on<MessageName>` |
+| `receive` | `do<MessageName><MessageType>` or `do<MessageName>` |
+
+Examples:
+
+```text
+onOrderCreatedEvent / onOrderCreated
+onOrderCreatedEventV1 / onOrderCreatedV1
+doAuthorizePaymentCommand / doAuthorizePayment
+doAuthorizePaymentCommandV1 / doAuthorizePaymentV1
+```
+
+### Client Operations
+
+For `asyncapi-client.yml`, the direction is reversed because the document describes
+the caller or consumer of another service capability:
+
+| Action | Operation id |
+| --- | --- |
+| `send` | `do<MessageName><MessageType>` or `do<MessageName>` |
+| `receive` | `on<MessageName><MessageType>` or `on<MessageName>` |
+
+Examples:
+
+```text
+doAuthorizePaymentCommand / doAuthorizePayment
+doAuthorizePaymentCommandV1 / doAuthorizePaymentV1
+onPaymentAuthorizedEvent / onPaymentAuthorized
+onPaymentAuthorizedEventV1 / onPaymentAuthorizedV1
+```
+
+The deterministic operation names are useful for consistent generated code across
+providers and clients.
+
+## Visibility And Audience
+
+Every inline provider channel must define exactly one of:
+
+| Extension | Purpose |
+| --- | --- |
+| `x-visibility` | Radial visibility for domain events. |
+| `x-target-audience` | Explicit consumers for integration events, commands, or responses. |
+
+### Visibility
+
+`x-visibility` must be one of:
+
+| Value | Meaning |
+| --- | --- |
+| `global` | Any domain, subdomain, or service may subscribe. |
+| `domain` | Visible within the Arcadia domain. |
+| `subdomain` | Visible within the Arcadia subdomain. |
+| `internal` | Visible only to the producing service. |
+| `technical` | Technical event with specific visibility rules. |
+
+### Target Audience
+
+`x-target-audience` must be a non-empty array. Each entry must follow:
+
+```text
+<domain>.<subdomain>.<service>
+```
+
+Example:
+
+```yaml
+x-target-audience:
+  - orders.checkout.orders-checkout
+```
+
+Radial visibility and directed consumption are mutually exclusive concepts, so a
+channel cannot declare both extensions.
+
+## Kafka Bindings
+
+### Principals And Consumer Groups
+
+When present, `bindings.kafka.x-principal` and `bindings.kafka.x-groupId` must follow:
+
+```text
+<domain>.<subdomain>.<service>.<runtime-layer>
+```
+
+Example:
+
+```text
+orders.checkout.orders-checkout.application
+```
+
+This Arcadia service-qualified identity supports authentication, ACL
+provisioning, and consumer-specific retry or dead-letter topics.
+
+### Schema Registry
+
+For `channels.<channel-id>.bindings.kafka.x-kafka-schema-registry`:
+
+| Field | Allowed values |
+| --- | --- |
+| `schemaLookupStrategy` | `TopicNameStrategy`, `TopicRecordNameStrategy` |
+| `compatibility` | `BACKWARD`, `FORWARD`, `FULL` |
+| `type` | `AVRO`, `JSON` |
+| `normalize` | Boolean |
+
+`TopicNameStrategy` is the normal choice when a topic has one schema.
+`TopicRecordNameStrategy` is available when multiple record types must share a topic
+while preserving strict FIFO ordering.
+
+For reusable Kafka message traits, OpenLint also validates:
+
+| Field | Allowed values |
+| --- | --- |
+| `schemaLookupStrategy` | `TopicNameStrategy`, `TopicRecordNameStrategy` |
+| `x-schemaCompatibility` | `BACKWARD`, `FORWARD`, `FULL` |
+| `x-normalize` | Boolean |
+
+## Retry And Dead-Letter Topics
+
+`bindings.kafka.x-error-topics` is allowed only on `receive` operations. This models
+error handling where messages are consumed and processing may fail.
+
+The enforced address template is:
+
+```text
+${groupId}.__.${channel.address}.${suffix}
+```
+
+It produces consumer-specific topics such as:
+
+```text
+payments.processing.payments-processing.application.__.orders-checkout.order-created.event.avro.v1.retry-1
+payments.processing.payments-processing.application.__.orders-checkout.order-created.event.avro.v1.dlq
+```
+
+The reserved `__` separator makes the consumption relationship explicit. Since the
+template uses `${groupId}`, the Kafka binding (on the operation or one of its operation traits) must define
+`groupId` or `x-groupId`.
+
+### Error Topic Declaration
+
+Only these fields are allowed:
+
+| Field | Purpose |
+| --- | --- |
+| `addressTemplate` | Required template for generated topic names. |
+| `retryTopics` | Number of retry topics. Must be a positive integer when `retry` is present. |
+| `retrySuffixes` | Optional non-empty string array with one suffix per retry topic. |
+| `retry` | Retry topic provisioning plan. |
+| `dlq` | Dead-letter topic provisioning plan. |
+
+At least one of `retry` or `dlq` is required.
+
+### Provisioning Plans
+
+Inline and reusable `retry` or `dlq` plans may contain:
+
+| Field | Purpose |
+| --- | --- |
+| `$ref` | Reference a reusable plan. It cannot be combined with inline fields. |
+| `partitions` | Optional positive integer. |
+| `replicas` | Optional positive integer. |
+| `topicConfiguration` | Optional Kafka topic configuration object. |
+| `env-server-overrides` | Optional server-specific overrides. |
+
+Reusable plans live under:
+
+```yaml
+components:
+  x-error-topics:
+    retry:
+      <kebab-case-plan-id>:
+        partitions: 1
+        replicas: 2
+    dlq:
+      <kebab-case-plan-id>:
+        partitions: 1
+        replicas: 2
+```
+
+Keys under `env-server-overrides` must match names declared in the AsyncAPI `servers`
+section. Override `partitions` and `replicas` values must also be positive integers.
+
+## Governance Recommendations Not Yet Enforced
+
+The governance process document includes additional recommendations that are not
+currently validated by OpenLint:
+
+- Event names should describe completed facts, such as `payment-authorized`.
+- Command names should describe actions, such as `authorize-payment`.
+- Domain events should use `x-visibility`; integration events, commands, and
+  responses should normally use `x-target-audience`.
+- Schema compatibility should be selected according to message type and reprocessing
+  needs.
+- Avro namespaces should follow `com.arcadiaeditions.<domain>.<subdomain>.<service>[.v<version>]`.
+- Sensitive Avro fields should carry the appropriate security tags.
+- Delivery guarantees and Kafka producer or consumer settings should follow the
+  selected processing pattern.
+
+These remain design and review responsibilities until corresponding OpenLint rules
+are implemented.
