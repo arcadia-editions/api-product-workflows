@@ -17,7 +17,13 @@ function main() {
   const result = spawnSync(
     process.execPath,
     [cli, 'lint', '--fail-severity=error', '-r', bundlePath, ...fixtures],
-    { stdio: 'inherit' }
+    {
+      stdio: 'inherit',
+      // The service-identity rule compares GITHUB_REPOSITORY with the provider
+      // repository derived from the AsyncAPI id. Pin it to the fixture's
+      // provider so the result does not depend on where the fixtures run.
+      env: { ...process.env, GITHUB_REPOSITORY: 'arcadia-editions/catalog-products-api' },
+    }
   );
 
   if (result.error) {
