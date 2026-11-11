@@ -53,7 +53,7 @@ fi
 
 failures=0
 while IFS= read -r record; do
-  "$SCRIPT_DIR/validate-artifact.sh" "$root" "$pipeline_root" "$record" || failures=$((failures + 1))
+  "$SCRIPT_DIR/validate-artifact-openlint.sh" "$root" "$pipeline_root" "$record" || failures=$((failures + 1))
 done < <(jq -c '.[]' <<< "$plan")
 [[ "$failures" -eq 0 ]] || arcadia_die "$failures artifact validation(s) failed"
 
