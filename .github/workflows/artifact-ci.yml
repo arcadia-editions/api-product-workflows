@@ -46,6 +46,8 @@ jobs:
       has_kafka_artifacts: ${{ steps.kafka-detect.outputs.has_kafka_artifacts }}
     env:
       SPECTRAL_BUNDLE_URL: ${{ vars.SPECTRAL_BUNDLE_URL }}
+      OPENLINT_BUNDLE_URL: ${{ vars.OPENLINT_BUNDLE_URL }}
+      OPENLINT_BUNDLE_SHA256: ${{ vars.OPENLINT_BUNDLE_SHA256 }}
     steps:
       - name: Check out caller commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
