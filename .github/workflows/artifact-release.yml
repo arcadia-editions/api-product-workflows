@@ -132,6 +132,27 @@ jobs:
             source "$plan" "$ARTIFACT_ID" "$RELEASE_VERSION" "$DEFAULT_BRANCH"
           echo "plan=$(jq -c . <<< "$plan")" >> "$GITHUB_OUTPUT"
 
+      # Nothing permanent (release branch, merge, tag, publish) may happen until every
+      # credential the rest of the run needs is known to work. Expired tokens are the
+      # most common way to leave a release half-done.
+      - name: Verify credentials before any permanent step
+        env:
+          ARCHITECTURE_TOKEN: ${{ secrets.architecture_token }}
+        shell: bash
+        run: |
+          fail=0
+          [[ -n "$ARCHITECTURE_TOKEN" ]] || { echo "::error::architecture_token is empty (org secret ARCHITECTURE_APP_TOKEN not granted to this repository)"; fail=1; }
+          if [[ "$(gh api "repos/$GITHUB_REPOSITORY" -q .permissions.push 2>/dev/null)" != "true" ]]; then
+            echo "::error::release_token cannot push to $GITHUB_REPOSITORY (missing, expired or insufficient scope)"; fail=1
+          fi
+          if [[ -n "$ARCHITECTURE_TOKEN" ]]; then
+            # Dry run: an event type no workflow listens to. 204 proves the token can dispatch.
+            if ! GH_TOKEN="$ARCHITECTURE_TOKEN" gh api "repos/$ARCHITECTURE_REPOSITORY/dispatches"                 -f event_type=preflight >/dev/null 2>&1; then
+              echo "::error::architecture_token cannot dispatch to $ARCHITECTURE_REPOSITORY (expired or insufficient scope)"; fail=1
+            fi
+          fi
+          (( fail == 0 )) || { echo "Fix the credentials above and re-run; nothing has been released yet." >&2; exit 1; }
+
       - name: Create release commit
         env:
           PLAN: ${{ steps.preflight.outputs.plan }}
