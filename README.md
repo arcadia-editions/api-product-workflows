@@ -247,6 +247,24 @@ CONFLUENT_SCHEMA_REGISTRY_API_SECRET
 
 These live as **organization-level** secrets/variables visible to the `*-api` repositories, never on `api-product-workflows` itself - that repository only ever supplies code, never run identity. `service_repo` inputs stay strictly self-referential (each repository's own caller names itself); a shared dispatcher that accepted an arbitrary repository name would need one over-privileged, org-wide credential and would reintroduce a confused-deputy risk.
 
+## Recreating the GitHub token
+
+One classic personal access token covers every GitHub credential the pipeline uses. When it expires (releases fail with `Bad credentials (HTTP 401)` or "cannot dispatch ... expired or insufficient scope"), recreate it and store it again.
+
+1. GitHub > **Settings > Developer settings > Personal access tokens > Tokens (classic) > Generate new token (classic)**.
+2. Scopes: `repo`, `workflow`, `write:packages`. It must be a **classic** token: fine-grained tokens cannot publish to GitHub Packages. Choose an expiry longer than the demo window.
+3. Store it as three secrets (you need to be an org admin and logged in with `gh auth login`). Each command prompts you to paste the token, so it never lands in your shell history:
+
+```bash
+gh secret set ARCHITECTURE_APP_TOKEN --org arcadia-editions --visibility selected --repos catalog-products-api,catalog-inventory-api,orders-checkout-api,payments-processing-api,fulfillment-shipping-api,notifications-consumer-api,arcadia-editions-modulith-api
+
+gh secret set MAVEN_REPOSITORY_PASSWORD_OR_TOKEN --org arcadia-editions --visibility all
+
+gh secret set EVENT_CATALOG_TOKEN --repo arcadia-editions/arcadia-editions-architecture
+```
+
+Then re-run any failed workflow. Releases and the manifest workflow verify their tokens first and fail before changing anything, naming the credential that is bad. Confluent Cloud and Terraform Cloud credentials are restored with the bootstrap scripts below.
+
 ## Bootstrapping the Confluent CI environment
 
 Use `scripts/terraform/bootstrap-confluent-ci.sh` to create or reuse the low-volume Confluent Cloud resources used by CI and write Terraform-compatible exports to `.env.confluent-ci`.
