@@ -247,103 +247,23 @@ CONFLUENT_SCHEMA_REGISTRY_API_SECRET
 
 These live as **organization-level** secrets/variables visible to the `*-api` repositories, never on `api-product-workflows` itself - that repository only ever supplies code, never run identity. `service_repo` inputs stay strictly self-referential (each repository's own caller names itself); a shared dispatcher that accepted an arbitrary repository name would need one over-privileged, org-wide credential and would reintroduce a confused-deputy risk.
 
-## Rehydrating a demo environment
+## Recreating the GitHub token
 
-Everything in this pipeline authenticates with a handful of credentials that expire or get lost between demos: a GitHub token, the Confluent Cloud trial account and Terraform Cloud. This section restores all of them. Do the steps in order; each one verifies what it stores before writing anything, so a mistake fails early and leaves nothing half-configured.
-
-### Credential map
-
-| Credential | Stored as | Where | Used by |
-| --- | --- | --- | --- |
-| One classic GitHub PAT | `ARCHITECTURE_APP_TOKEN` | org secret, selected `*-api` repos | releases dispatching the manifest update |
-| Same PAT | `EVENT_CATALOG_TOKEN` | secret in `arcadia-editions-architecture` | manifest workflow dispatching the catalog rebuild |
-| Same PAT | `MAVEN_REPOSITORY_PASSWORD_OR_TOKEN` | org secret, all repos | publishing to GitHub Packages (Maven) |
-| PAT owner login | `MAVEN_REPOSITORY_USERNAME` | org secret, selected `*-api` repos | publishing to GitHub Packages (Maven) |
-| Same PAT (optional) | `ARTIFACT_RELEASE_TOKEN` | org secret, selected `*-api` repos | release branches, PRs and tags created by the PAT instead of `github.token` |
-| Confluent keys | `CONFLUENT_*_API_KEY` / `_SECRET`, plus the `CONFLUENT_*` ids and endpoints as variables | org, all repos | Kafka and Schema Registry provisioning |
-| Terraform Cloud token | `TF_TOKEN_app_terraform_io`, variable `TF_CLOUD_ORGANIZATION` | org, all repos | Terraform state and workspaces |
-
-`ARTIFACT_RELEASE_TOKEN`, `ARTIFACT_WORKFLOWS_CHECKOUT_TOKEN` and `ARCHITECTURE_RELEASE_TOKEN` are optional: when they are not set the workflows fall back to `github.token`. The only visible effect is that CI does not run on the release pull requests (GitHub does not run workflows for events created by `github.token`). Set `ARTIFACT_RELEASE_TOKEN` with `--release-token` below if you want those runs.
-
-### Step 1 - GitHub token
+One classic personal access token covers every GitHub credential the pipeline uses. When it expires (releases fail with `Bad credentials (HTTP 401)` or "cannot dispatch ... expired or insufficient scope"), recreate it and store it again.
 
 1. GitHub > **Settings > Developer settings > Personal access tokens > Tokens (classic) > Generate new token (classic)**.
-2. Scopes: `repo`, `workflow`, `write:packages`. It must be a **classic** token: fine-grained tokens cannot publish to GitHub Packages, and one classic token covers every use above.
-3. Expiration: choose longer than the demo window. The script warns when fewer than 7 days remain.
-4. Run, from this repository (you need to be an org admin and logged in with `gh auth login`):
+2. Scopes: `repo`, `workflow`, `write:packages`. It must be a **classic** token: fine-grained tokens cannot publish to GitHub Packages. Choose an expiry longer than the demo window.
+3. Store it as three secrets (you need to be an org admin and logged in with `gh auth login`). Each command prompts you to paste the token, so it never lands in your shell history:
 
 ```bash
-./scripts/github/bootstrap-github-tokens.sh --dry-run          # verify only, writes nothing
-./scripts/github/bootstrap-github-tokens.sh                    # prompts for the token (hidden)
-GITHUB_PAT=ghp_xxx ./scripts/github/bootstrap-github-tokens.sh --release-token
+gh secret set ARCHITECTURE_APP_TOKEN --org arcadia-editions --visibility selected --repos catalog-products-api,catalog-inventory-api,orders-checkout-api,payments-processing-api,fulfillment-shipping-api,notifications-consumer-api,arcadia-editions-modulith-api
+
+gh secret set MAVEN_REPOSITORY_PASSWORD_OR_TOKEN --org arcadia-editions --visibility all
+
+gh secret set EVENT_CATALOG_TOKEN --repo arcadia-editions/arcadia-editions-architecture
 ```
 
-Before it writes anything the script checks that the token is valid and not expired, has the three scopes, can push to every `*-api` repository plus the architecture and catalog repositories, and can dispatch events to the architecture and catalog repositories. If any check fails it stops and tells you which one. The token is never printed.
-
-### Step 2 - Confluent Cloud
-
-Confluent Cloud trial accounts expire, so every few weeks you may need a new one.
-
-1. Create (or sign in to) a Confluent Cloud account and organization in the browser. There is nothing to script here.
-2. Install the Confluent CLI and `jq`, then `confluent login --save`.
-3. Run the bootstrap against the organization:
-
-```bash
-./scripts/terraform/bootstrap-confluent-ci.sh --dry-run                  # show what it would create
-./scripts/terraform/bootstrap-confluent-ci.sh --github-secrets           # create or reuse, store in the org
-./scripts/terraform/bootstrap-confluent-ci.sh --github-secrets --rotate-keys
-```
-
-It creates or reuses an environment (`default`, with the Essentials governance package), a Basic single-zone Kafka cluster (`arcadia_editions_cluster`, GCP `us-east1`), the Schema Registry, a service account (`zenwave-ci-sa`) with the role bindings it needs, and three API keys. Everything except the keys is looked up by name, so re-running is safe.
-
-API secrets are only returned **at creation time**. The script keeps them in `.env.confluent-ci` (git-ignored) and reuses them on later runs. Use `--rotate-keys` when that file is missing, when the keys were deleted or revoked, or on a new Confluent account; the old file is overwritten. With `--github-secrets` the script writes the `CONFLUENT_*` secrets and variables to the organization (visibility all); use `--repo owner/repo` to target one repository instead.
-
-To empty a reused account between demos (it is dry-run unless `--yes` is given):
-
-```bash
-bash scripts/terraform/wipe-confluent-account.sh          # shows what would be deleted
-bash scripts/terraform/wipe-confluent-account.sh --yes
-```
-
-### Step 3 - Terraform Cloud
-
-1. Create or sign in to a Terraform Cloud account at `app.terraform.io` and make sure the organization exists (this project uses `arcadia-editions`).
-2. Get a token: `terraform login` (it saves one locally), or **User settings > Tokens > Create an API token**.
-3. Store it:
-
-```bash
-./scripts/terraform/bootstrap-terraform-cloud-ci.sh --dry-run
-./scripts/terraform/bootstrap-terraform-cloud-ci.sh --github-secrets
-```
-
-The script reads `.env.terraform-cloud`, then the environment, then the token saved by `terraform login`, verifies it against the organization, and only then stores `TF_TOKEN_app_terraform_io` (secret) and `TF_CLOUD_ORGANIZATION` (variable) in the org.
-
-Workspaces are not created by hand: the Kafka provisioning workflows create one workspace per service and stage on first use. To start from zero between demos:
-
-```bash
-bash scripts/terraform/wipe-service-environment.sh        # one service, run from its repository
-TF_CLOUD_ORGANIZATION=arcadia-editions TF_TOKEN_app_terraform_io=... bash scripts/terraform/wipe-terraform-workspaces.sh   # every workspace
-```
-
-### Step 4 - Check that it all works
-
-```bash
-gh secret list --org arcadia-editions        # expect ARCHITECTURE_APP_TOKEN, MAVEN_*, CONFLUENT_*, TF_TOKEN_app_terraform_io
-gh variable list --org arcadia-editions      # expect CONFLUENT_*, TF_CLOUD_ORGANIZATION, SPECTRAL_BUNDLE_URL, ZENWAVE_ALIAS
-gh secret list -R arcadia-editions/arcadia-editions-architecture   # expect EVENT_CATALOG_TOKEN
-```
-
-Then re-run any failed workflow. Releases and the manifest workflow also re-verify their tokens first and fail before changing anything, naming the credential that is bad.
-
-### When something fails
-
-| Symptom | Cause | Fix |
-| --- | --- | --- |
-| `Bad credentials (HTTP 401)` or "cannot dispatch ... expired or insufficient scope" | the PAT expired or was revoked | Step 1 |
-| `architecture_token is empty` | `ARCHITECTURE_APP_TOKEN` is not shared with that repository | rerun Step 1 (it re-applies the `*-api` allowlist) or add the repo to the secret's allowlist |
-| Maven publish `401`/`403` | PAT lacks `write:packages`, or `MAVEN_REPOSITORY_USERNAME` is not the token owner | Step 1 |
-| Terraform: `401` from Confluent | Confluent keys deleted or trial ended | Step 2 with `--rotate-keys` |
-| Terraform: `401`/`404` from `app.terraform.io` | Terraform token or organization wrong | Step 3 |
+Then re-run any failed workflow. Releases and the manifest workflow verify their tokens first and fail before changing anything, naming the credential that is bad. Confluent Cloud and Terraform Cloud credentials are restored with the bootstrap scripts below.
 
 ## Bootstrapping the Confluent CI environment
 
