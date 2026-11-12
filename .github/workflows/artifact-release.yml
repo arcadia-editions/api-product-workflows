@@ -153,7 +153,10 @@ jobs:
         run: |
           fail=0
           [[ -n "$ARCHITECTURE_TOKEN" ]] || { echo "::error::architecture_token is empty (org secret ARCHITECTURE_APP_TOKEN not granted to this repository)"; fail=1; }
-          if [[ "$(gh api "repos/$GITHUB_REPOSITORY" -q .permissions.push 2>/dev/null)" != "true" ]]; then
+          # .permissions is only returned for user tokens (null for GITHUB_TOKEN / App tokens),
+          # so probe receive-pack instead: a dry-run push authenticates for write without changing refs.
+          gh auth setup-git
+          if ! git -C source push --dry-run origin "HEAD:refs/heads/preflight-probe-$GITHUB_RUN_ID" >/dev/null 2>&1; then
             echo "::error::release_token cannot push to $GITHUB_REPOSITORY (missing, expired or insufficient scope)"; fail=1
           fi
           if [[ -n "$ARCHITECTURE_TOKEN" ]]; then
