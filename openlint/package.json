@@ -8,7 +8,7 @@
     "serve:dist": "node scripts/serve-dist.js"
   },
   "devDependencies": {
-    "@openlint/openlint-ruleset-migrator": "0.1.0",
+    "@openlint/openlint-ruleset-migrator": "0.2.0",
     "@openlint/openlint-rulesets": "0.1.0",
     "esbuild": "0.28.2"
   }
