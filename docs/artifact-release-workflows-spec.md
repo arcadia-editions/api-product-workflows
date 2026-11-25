@@ -20,8 +20,8 @@ Inputs are `artifact` and `version`. `artifact=asyncapi-all` selects the complet
 
 1. Resolve the release plan from the HTTPS manifest. For `asyncapi-all`, require its concrete members to have a shared current version. For `service-all`, resolve every artifact owned by the service while allowing their current versions to differ.
 2. Create `release/{artifactId}/v{version}` from `main`.
-3. For artifact releases, write the release version to every selected source. For `service-all`, leave every source unchanged. Validate the complete plan, commit it, and push the release branch.
-4. Open a PR containing the release-version change, merge it into `main` after required checks, and delete the release branch.
+3. For artifact releases, write the release version to every selected source. For `service-all`, leave every source unchanged. Validate the complete plan, commit it with `[skip ci]`, and push the release branch. Artifact CI does not run on release PRs; the release run is the validation.
+4. Open a PR containing the release-version change, merge it into `main` as soon as branch rules allow, and delete the release branch.
 5. Create the identically named tag on the resulting `main` merge commit.
 6. Package one artifact. Maven JAR payload entries are rooted under the Java package path derived from their `groupId`; `META-INF` remains at the archive root. The `asyncapi-all` JAR contains every bundle source and referenced schema. The `service-all` JAR and generic tree contain every Git-tracked repository file, and its individual artifacts are not republished to Apicurio.
 7. Create a GitHub release from the tag. Only `service-all` is marked as the latest release.

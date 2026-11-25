@@ -96,8 +96,8 @@ For `artifact=asyncapi-all` and `version=1.4.0`, expect:
 1. Preflight validates the inputs, source version and absence of conflicting branches, tags and GitHub releases.
 2. A branch named `release/asyncapi-all/v1.4.0` is created from `main`.
 3. Every declared `asyncapi`/`asyncapi-client` source is changed to `1.4.0`, linted and validated together.
-4. The release change is committed and the branch is pushed.
-5. A pull request updates `main` to `1.4.0`, merges through branch protection and deletes the release branch.
+4. The release change is committed with `[skip ci]` and the branch is pushed. The release run has already validated it, so artifact CI does not run on the release PR.
+5. A pull request updates `main` to `1.4.0`, merges as soon as `main` allows it and deletes the release branch.
 6. An annotated tag named `release/asyncapi-all/v1.4.0` is created on the merged `main` commit.
 7. One `asyncapi-all` Maven JAR containing all bundle members and referenced schemas is published.
 8. A GitHub release titled `asyncapi-all v1.4.0` is created with the Maven JAR and checksum; a combined Terraform ZIP is generated from the same tag and attached to that release.
