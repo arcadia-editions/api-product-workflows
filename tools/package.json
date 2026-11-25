@@ -4,6 +4,6 @@
   "description": "Pinned CLIs for artifact validation. This file is the version source of truth.",
   "dependencies": {
     "@asyncapi/cli": "3.4.0",
-    "openlint": "1.1.3"
+    "openlint": "1.3.0"
   }
 }
