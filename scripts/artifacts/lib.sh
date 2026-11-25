@@ -4,8 +4,6 @@ set -o pipefail
 
 readonly ARCADIA_ARTIFACT_TYPES=(zdl zfl openapi asyncapi asyncapi-client)
 readonly ARCADIA_ARTIFACTS_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly ARCADIA_SPECTRAL_CLI_VERSION="6.15.0"
-readonly ARCADIA_REDOCLY_CLI_VERSION="1.34.5"
 readonly ARCADIA_APICURIO_PLUGIN_VERSION="3.2.2"
 readonly ARCADIA_MAVEN_DEPLOY_PLUGIN_VERSION="3.1.4"
 

@@ -12,7 +12,7 @@ Every manifest artifact is normally an independent release unit. `asyncapi-all` 
 - Workflow-only changes validate the complete repository inventory.
 - AsyncAPI bundle members must expose the same `info.version` whenever both exist.
 
-Malformed YAML fails in the OpenAPI or AsyncAPI validator. Spectral applies Arcadia policy. AJV and YAML-to-JSON conversion are not part of the workflow.
+Malformed YAML fails in the OpenAPI or AsyncAPI validator. OpenLint applies Arcadia policy. AJV and YAML-to-JSON conversion are not part of the workflow.
 
 ## Release lifecycle
 

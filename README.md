@@ -52,9 +52,9 @@ CI has read-only repository permissions and does not create commits, tags, packa
 | ----------------- | -------------------------------------------------- | ----- | -------- | ----------- |
 | `zdl`             | ZenWave ZDL parser                                 | Yes   | No       | Yes         |
 | `zfl`             | ZenWave ZFL parser                                 | Yes   | No       | Yes         |
-| `openapi`         | Redocly and Spectral                               | Yes   | Yes      | Yes         |
-| `asyncapi`        | AsyncAPI CLI, Spectral and referenced Avro schemas | Yes   | Yes      | Yes         |
-| `asyncapi-client` | AsyncAPI CLI and Spectral                          | Yes   | Yes      | Yes         |
+| `openapi`         | OpenLint                                           | Yes   | Yes      | Yes         |
+| `asyncapi`        | AsyncAPI CLI, OpenLint and referenced Avro schemas | Yes   | Yes      | Yes         |
+| `asyncapi-client` | AsyncAPI CLI and OpenLint                          | Yes   | Yes      | Yes         |
 
 The publication columns describe release capabilities. CI only performs validation.
 
@@ -326,10 +326,12 @@ Useful options:
 - `scripts/artifacts/DslTool.java`: ZDL/ZFL parsing and version editing.
 - `scripts/artifacts/`: validation, packaging and publication helpers.
 - `scripts/terraform/`: AsyncAPI-to-Terraform generation, local execution and Confluent bootstrap helpers.
-- `spectral/`: shared Spectral rules and pinned bundle build.
+- `openlint/`: shared OpenLint rules and pinned bundle build, used by artifact validation.
+- `spectral/`: legacy Spectral rules and bundle build. Not used by artifact workflows.
 - `terraform/common/`: shared Terraform overlay.
 - `docs/artifact-release-workflows-spec.md`: detailed artifact lifecycle specification.
-- `docs/spectral-workflows.md`: Spectral bundle maintenance and release process.
+- `docs/openlint-workflows.md`: OpenLint bundle maintenance and release process.
+- `docs/spectral-workflows.md`: legacy Spectral bundle maintenance and release process.
 
 Reusable artifact workflows intentionally use two checkouts:
 

@@ -45,7 +45,6 @@ jobs:
       plan: ${{ steps.detect.outputs.plan }}
       has_kafka_artifacts: ${{ steps.kafka-detect.outputs.has_kafka_artifacts }}
     env:
-      SPECTRAL_BUNDLE_URL: ${{ vars.SPECTRAL_BUNDLE_URL }}
       OPENLINT_BUNDLE_URL: ${{ vars.OPENLINT_BUNDLE_URL }}
       OPENLINT_BUNDLE_SHA256: ${{ vars.OPENLINT_BUNDLE_SHA256 }}
     steps:
