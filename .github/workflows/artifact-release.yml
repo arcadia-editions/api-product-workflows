@@ -77,7 +77,6 @@ jobs:
       ARTIFACTORY_GENERIC_RELEASE_URL: ${{ vars.ARTIFACTORY_GENERIC_RELEASE_URL }}
       ARTIFACTORY_USERNAME: ${{ secrets.artifactory_username }}
       ARTIFACTORY_PASSWORD_OR_TOKEN: ${{ secrets.artifactory_password_or_token }}
-      SPECTRAL_BUNDLE_URL: ${{ vars.SPECTRAL_BUNDLE_URL }}
       OPENLINT_BUNDLE_URL: ${{ vars.OPENLINT_BUNDLE_URL }}
       OPENLINT_BUNDLE_SHA256: ${{ vars.OPENLINT_BUNDLE_SHA256 }}
     steps:

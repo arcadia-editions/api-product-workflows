@@ -2,7 +2,7 @@
 
 This document explains how the shared OpenLint rules bundle is built, validated, retained by CI, and published as an immutable release.
 
-The Spectral bundle workflows and `scripts/artifacts/validate-artifact.sh` stay in place. This path is additive until the artifact workflows are switched over.
+OpenLint is the active lint path for the artifact workflows. `execute-plan.sh` calls `validate-artifact-openlint.sh`, so `artifact-ci.yml` and `artifact-release.yml` lint OpenAPI and AsyncAPI artifacts with OpenLint only. Spectral and Redocly are no longer called, and the artifact workflows no longer read `SPECTRAL_BUNDLE_URL`. The Spectral bundle sources, its own CI and release workflows, and the `spectral/v*` tags remain as frozen legacy; see [spectral-workflows.md](spectral-workflows.md).
 
 ## Design
 
@@ -34,13 +34,13 @@ OpenAPI documents receive the OpenAPI rules. AsyncAPI documents receive the Asyn
 
 `scripts/artifacts/lint-openlint.sh` downloads `OPENLINT_BUNDLE_URL`, checks it with `sha256sum -c` against `OPENLINT_BUNDLE_SHA256`, and then runs `openlint lint --fail-severity=error` on the local file. It accepts one or more document paths and lints them in a single invocation.
 
-`scripts/artifacts/validate-artifact-openlint.sh` is the parallel of `validate-artifact.sh`:
+`scripts/artifacts/validate-artifact-openlint.sh` validates each artifact in the execution plan:
 
 - `openapi` is linted with OpenLint only. Redocly is not invoked.
 - `asyncapi` and `asyncapi-client` are validated with the locked AsyncAPI CLI, then linted with the same OpenLint command. Provider `asyncapi` documents still JSON-parse each referenced `.avsc`.
 - `zdl` and `zfl` still use `DslTool`.
 
-`execute-plan.sh` still calls `validate-artifact.sh`. That script now uses the locked AsyncAPI CLI as well. Spectral and Redocly on that path still install through `npx`. Pointing `execute-plan.sh` at `validate-artifact-openlint.sh` is the later swap. That swap passes `OPENLINT_BUNDLE_URL` and `OPENLINT_BUNDLE_SHA256`. OpenLint requires Node.js 22, or 24 and later. The artifact workflows already install Node.js `22.17.0` for the locked CLIs.
+`execute-plan.sh` calls `validate-artifact-openlint.sh` for every artifact in CI and release mode. `artifact-ci.yml` and `artifact-release.yml` pass `OPENLINT_BUNDLE_URL` and `OPENLINT_BUNDLE_SHA256` from organization variables. OpenLint requires Node.js 22, or 24 and later. The artifact workflows install Node.js `22.17.0` for the locked CLIs.
 
 ## OpenLint CI
 
@@ -113,12 +113,19 @@ https://raw.githubusercontent.com/arcadia-editions/api-product-workflows/refs/ta
 
 The raw URL resolves through the tag, not through a branch. `lint-openlint.sh` does not trust that URL by itself. It downloads the file and requires `OPENLINT_BUNDLE_SHA256` to match before OpenLint reads it.
 
-Set these organization variables for the `*-api` repositories when the artifact workflows are switched:
+The artifact workflows read these organization variables:
 
 - `OPENLINT_BUNDLE_URL` is the raw tag URL.
 - `OPENLINT_BUNDLE_SHA256` is the 64-character hex digest from the release notes, or the first field of `openlint.js.sha256`.
 
-Leave `SPECTRAL_BUNDLE_URL` pointed at `spectral/v0.1.3` until that switch has a green full validation.
+They currently point at `openlint/v0.1.0`:
+
+```text
+OPENLINT_BUNDLE_URL=https://raw.githubusercontent.com/arcadia-editions/api-product-workflows/refs/tags/openlint/v0.1.0/openlint/dist/openlint.js
+OPENLINT_BUNDLE_SHA256=45c4f7729c09c393feb965fc67756fad2026fc2886376ec908daf812ca974167
+```
+
+To move to a new bundle, update both variables together. `lint-openlint.sh` fails if the digest does not match.
 
 ### Tag protection
 
@@ -158,4 +165,4 @@ Fixture lint uses the CLI from `tools/node_modules`. To lint documents with a bu
 - `openlint/package.json` carries no version field. The release version exists only as the workflow input and the resulting tag and release name.
 - The OpenLint CLI version and the AsyncAPI CLI version are pinned only in `tools/package.json`.
 - Release tags are immutable distribution references.
-- `spectral/v*` tags and `docs/spectral-workflows.md` stay as they are.
+- `spectral/v*` tags and the `spectral/` sources are frozen legacy. Artifact workflows do not use them.

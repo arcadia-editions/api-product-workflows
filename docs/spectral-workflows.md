@@ -1,5 +1,7 @@
 # Spectral bundle workflows
 
+> Legacy. Artifact workflows lint with OpenLint; see [openlint-workflows.md](openlint-workflows.md). The Spectral sources, workflows and `spectral/v*` tags are frozen and kept for reference only. No artifact workflow reads `SPECTRAL_BUNDLE_URL`.
+
 This document explains how the shared Spectral rules bundle is built, validated, retained by CI, and published as an immutable release.
 
 ## Design
@@ -44,7 +46,7 @@ The release workflow is started manually with a single input:
 
 - `version`: the release version, for example `0.1.0`.
 
-`spectral/package.json` carries no `version` field. Nothing reads it: the bundle is built purely from `spectral-rules.yml`, `validate-artifact.sh` always rebuilds from source, and the two distribution channels below key off the git tag name, not any committed version metadata. The release version only ever exists as the manually supplied `version` input and the resulting tag/release name.
+`spectral/package.json` carries no `version` field. Nothing reads it: the bundle is built purely from `spectral-rules.yml`, and the two distribution channels below key off the git tag name, not any committed version metadata. The release version only ever exists as the manually supplied `version` input and the resulting tag/release name.
 
 ### Release sequence
 
