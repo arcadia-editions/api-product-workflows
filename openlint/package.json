@@ -9,7 +9,7 @@
   },
   "devDependencies": {
     "@openlint/openlint-ruleset-migrator": "0.1.0",
-    "@openlint/openlint-rulesets": "0.1.0",
+    "@openlint/openlint-rulesets": "0.3.0",
     "esbuild": "0.28.2"
   }
 }
