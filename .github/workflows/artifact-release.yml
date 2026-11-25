@@ -191,7 +191,7 @@ jobs:
           if (( ${#paths[@]} > 0 )); then
             git -C source add -- "${paths[@]}"
           fi
-          git -C source commit --allow-empty -m "Release $ARTIFACT_ID $RELEASE_VERSION"
+          git -C source commit --allow-empty -m "Release $ARTIFACT_ID $RELEASE_VERSION [skip ci]"
           gh auth setup-git
           git -C source push origin "HEAD:refs/heads/$RELEASE_REF"
 
